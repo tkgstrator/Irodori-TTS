@@ -1,0 +1,10 @@
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+
+# Remove the default `ubuntu` user (UID 1000) so that common-utils can
+# create the `vscode` user at UID 1000 to match the host user.
+RUN userdel -r ubuntu 2>/dev/null || true
+
+RUN \
+  --mount=type=cache,target=/var/lib/apt,sharing=locked \
+  --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  apt-get update && apt-get install -y git-filter-repo
