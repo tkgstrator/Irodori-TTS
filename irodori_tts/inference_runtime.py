@@ -17,7 +17,12 @@ from safetensors.torch import load_file as load_safetensors_file
 
 from .codec import DACVAECodec, patchify_latent, unpatchify_latent
 from .config import ModelConfig
-from .lora import checkpoint_state_uses_lora
+from .lora import (
+    _require_peft,
+    checkpoint_state_uses_lora,
+    is_lora_safetensors_file,
+    unpack_lora_safetensors,
+)
 from .model import TextToLatentRFDiT
 from .rf import sample_euler_rf_cfg
 from .text_normalization import normalize_text
@@ -65,7 +70,7 @@ def default_runtime_device() -> str:
 def list_available_runtime_precisions(device: str | torch.device) -> list[str]:
     resolved = resolve_runtime_device(device)
     if resolved.type == "cuda":
-        return ["fp32", "bf16"]
+        return ["fp32", "bf16", "fp16"]
     return ["fp32"]
 
 
@@ -239,7 +244,11 @@ def resolve_runtime_dtype(*, precision: str, device: torch.device) -> torch.dtyp
         if device.type != "cuda":
             raise ValueError("precision='bf16' currently requires CUDA device.")
         return torch.bfloat16
-    raise ValueError(f"Unsupported precision={precision!r}. Expected one of: fp32, bf16.")
+    if mode == "fp16":
+        if device.type != "cuda":
+            raise ValueError("precision='fp16' currently requires CUDA device.")
+        return torch.float16
+    raise ValueError(f"Unsupported precision={precision!r}. Expected one of: fp32, bf16, fp16.")
 
 
 def resolve_cfg_scales(
@@ -418,6 +427,50 @@ class InferenceRuntime:
         self._infer_lock = threading.Lock()
 
     @classmethod
+    def from_components(
+        cls,
+        *,
+        model: torch.nn.Module,
+        model_cfg: ModelConfig,
+        tokenizer: PretrainedTextTokenizer,
+        caption_tokenizer: PretrainedTextTokenizer | None,
+        codec: DACVAECodec,
+        model_device: str | torch.device,
+        codec_device: str | torch.device | None = None,
+        max_text_len: int = 256,
+        max_caption_len: int | None = None,
+    ) -> InferenceRuntime:
+        """Build a runtime from already-loaded in-memory components.
+
+        Used by training-time sample generation: the trainer holds the model,
+        tokenizer, and codec in memory, and just needs to invoke ``synthesize``
+        without round-tripping a checkpoint through disk.
+        """
+        resolved_model_device = resolve_runtime_device(model_device)
+        resolved_codec_device = (
+            resolve_runtime_device(codec_device)
+            if codec_device is not None
+            else torch.device(str(codec.device) if hasattr(codec, "device") else "cpu")
+        )
+        key = RuntimeKey(
+            checkpoint="<in-memory>",
+            model_device=str(resolved_model_device),
+            codec_device=str(resolved_codec_device),
+        )
+        resolved_caption_max = max_text_len if max_caption_len is None else int(max_caption_len)
+        return cls(
+            key=key,
+            model_cfg=model_cfg,
+            train_cfg=None,
+            model=model,
+            tokenizer=tokenizer,
+            caption_tokenizer=caption_tokenizer,
+            codec=codec,
+            default_text_max_len=int(max_text_len),
+            default_caption_max_len=int(resolved_caption_max),
+        )
+
+    @classmethod
     def from_key(cls, key: RuntimeKey) -> InferenceRuntime:
         model_device = resolve_runtime_device(key.model_device)
         codec_device = resolve_runtime_device(key.codec_device)
@@ -505,6 +558,126 @@ class InferenceRuntime:
             default_text_max_len=default_text_max_len,
             default_caption_max_len=default_caption_max_len,
         )
+
+    @classmethod
+    def from_base_with_adapters(
+        cls,
+        key: RuntimeKey,
+        adapters: dict[str, str | Path],
+        default_adapter: str | None = None,
+    ) -> InferenceRuntime:
+        if not adapters:
+            raise ValueError("adapters mapping must not be empty")
+
+        model_device = resolve_runtime_device(key.model_device)
+        codec_device = resolve_runtime_device(key.codec_device)
+        model_dtype = resolve_runtime_dtype(
+            precision=key.model_precision,
+            device=model_device,
+        )
+        codec_dtype = resolve_runtime_dtype(
+            precision=key.codec_precision,
+            device=codec_device,
+        )
+
+        base_state, model_cfg_dict, train_cfg = _load_checkpoint_for_inference(
+            Path(key.checkpoint)
+        )
+        model_cfg = ModelConfig(**model_cfg_dict)
+
+        base_model = TextToLatentRFDiT(model_cfg).to(model_device)
+        base_model.load_state_dict(base_state)
+        base_model = base_model.to(dtype=model_dtype)
+        base_model.eval()
+
+        _, PeftModel, _ = _require_peft()
+        items = list(adapters.items())
+
+        def _resolve_adapter_dir(adapter_path: str | Path) -> str:
+            resolved = Path(adapter_path)
+            if is_lora_safetensors_file(resolved):
+                resolved = unpack_lora_safetensors(resolved)
+            return str(resolved)
+
+        first_name, first_path = items[0]
+        peft_model = PeftModel.from_pretrained(
+            base_model,
+            _resolve_adapter_dir(first_path),
+            adapter_name=str(first_name),
+            is_trainable=False,
+        )
+        for name, adapter_path in items[1:]:
+            peft_model.load_adapter(
+                _resolve_adapter_dir(adapter_path),
+                adapter_name=str(name),
+                is_trainable=False,
+            )
+        peft_model = peft_model.to(device=model_device, dtype=model_dtype)
+        peft_model.eval()
+
+        active = str(default_adapter) if default_adapter is not None else str(first_name)
+        peft_model.set_adapter(active)
+
+        tokenizer = PretrainedTextTokenizer.from_pretrained(
+            repo_id=model_cfg.text_tokenizer_repo,
+            add_bos=bool(model_cfg.text_add_bos),
+            local_files_only=False,
+        )
+        if tokenizer.vocab_size != model_cfg.text_vocab_size:
+            raise ValueError(
+                f"text_vocab_size mismatch: checkpoint text_vocab_size={model_cfg.text_vocab_size} but tokenizer "
+                f"({model_cfg.text_tokenizer_repo}) vocab_size={tokenizer.vocab_size}."
+            )
+        caption_tokenizer = None
+        if model_cfg.use_caption_condition:
+            caption_tokenizer = PretrainedTextTokenizer.from_pretrained(
+                repo_id=model_cfg.caption_tokenizer_repo_resolved,
+                add_bos=model_cfg.caption_add_bos_resolved,
+                local_files_only=False,
+            )
+
+        default_text_max_len = 256
+        default_caption_max_len = default_text_max_len
+        if isinstance(train_cfg, dict):
+            ckpt_text_max_len = train_cfg.get("max_text_len")
+            if isinstance(ckpt_text_max_len, int) and ckpt_text_max_len > 0:
+                default_text_max_len = int(ckpt_text_max_len)
+            ckpt_caption_max_len = train_cfg.get("max_caption_len")
+            if isinstance(ckpt_caption_max_len, int) and ckpt_caption_max_len > 0:
+                default_caption_max_len = int(ckpt_caption_max_len)
+            else:
+                default_caption_max_len = default_text_max_len
+
+        codec = DACVAECodec.load(
+            repo_id=key.codec_repo,
+            device=str(codec_device),
+            dtype=codec_dtype,
+            deterministic_encode=bool(key.codec_deterministic_encode),
+            deterministic_decode=bool(key.codec_deterministic_decode),
+            enable_watermark=bool(key.enable_watermark),
+        )
+        if model_cfg.latent_dim != codec.latent_dim:
+            raise ValueError(
+                f"Latent dimension mismatch: checkpoint latent_dim={model_cfg.latent_dim} but codec latent_dim={codec.latent_dim}."
+            )
+
+        return cls(
+            key=key,
+            model_cfg=model_cfg,
+            train_cfg=train_cfg if isinstance(train_cfg, dict) else None,
+            model=peft_model,
+            tokenizer=tokenizer,
+            caption_tokenizer=caption_tokenizer,
+            codec=codec,
+            default_text_max_len=default_text_max_len,
+            default_caption_max_len=default_caption_max_len,
+        )
+
+    def set_active_adapter(self, name: str) -> None:
+        model = self.model
+        if not hasattr(model, "set_adapter"):
+            raise RuntimeError("This runtime was not initialized with adapters.")
+        model.set_adapter(str(name))
 
     def _load_reference_latent(
         self,
