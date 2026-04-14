@@ -6,6 +6,13 @@
 #   WANDB_API_KEY      - W&B API key (optional; enables online logging).
 #   WANDB_BASE_URL     - Custom W&B server URL (e.g. https://wandb.tkgstrator.work).
 #                        Unset for public wandb.ai.
+#   WANDB_PROJECT      - W&B project name. Expanded into the training yaml
+#                        by pyaml-env (${WANDB_PROJECT:Irodori-TTS}).
+#   WANDB_ENTITY       - W&B entity (user / team). Expanded into the yaml
+#                        by pyaml-env (${WANDB_ENTITY:}). Leave unset to
+#                        fall back to your W&B default entity.
+#   WANDB_MODE         - W&B mode: online / offline / disabled. Expanded
+#                        into the yaml by pyaml-env (${WANDB_MODE:online}).
 #   CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET
 #                      - Cloudflare Access service-token credentials. Required
 #                        when WANDB_BASE_URL points at a server behind CF Access;
@@ -29,6 +36,12 @@
 #   NUM_GPUS           - Integer number of GPUs to use. If set (and GPUS unset),
 #                        selects indices [0..NUM_GPUS-1]. Default: all visible
 #                        GPUs (round-robin).
+#   NO_RESUME          - When "true", ignore existing checkpoints and start
+#                        fresh. Default: false (auto-resume from the latest
+#                        outputs/<speaker>_lora/checkpoint_XXXXXXX if present;
+#                        if the resumed state already satisfies early-stop or
+#                        has reached max_steps, train.py exits cleanly without
+#                        further training).
 #
 # Hyperparameter overrides (all optional — leave unset to use the template
 # configs/train_500m_v2_speaker_lora.yaml defaults). Each one, if set, is
@@ -100,11 +113,11 @@ log "base checkpoint: ${BASE_CKPT}"
 if [ -n "${HF_DATASET:-}" ]; then
   if [ -n "${SPEAKERS:-}" ]; then
     log "download: ${HF_DATASET} (speakers=${SPEAKERS})"
-    uv run --no-sync python scripts/hf_download_dataset.py \
+    uv run --no-sync python scripts/dataset/hf_download_dataset.py \
       --repo-id "${HF_DATASET}" --speakers "${SPEAKERS}"
   else
     log "download: ${HF_DATASET} (all speakers)"
-    uv run --no-sync python scripts/hf_download_dataset.py --repo-id "${HF_DATASET}"
+    uv run --no-sync python scripts/dataset/hf_download_dataset.py --repo-id "${HF_DATASET}"
   fi
 fi
 
@@ -153,10 +166,10 @@ for s in "${TRAIN_SPEAKERS[@]}"; do
   fi
 
   cfg="configs/train_500m_v2_${s}_lora.yaml"
-  if [ ! -f "${cfg}" ]; then
-    log "generating ${cfg}"
-    uv run --no-sync python scripts/make_speaker_config.py "${s}"
-  fi
+  # Always regenerate so save_every/valid_every are re-derived from the
+  # current manifest (target: ~10 checkpoints per run).
+  log "generating ${cfg}"
+  uv run --no-sync python scripts/train/make_speaker_config.py "${s}" --force
 done
 
 # -----------------------------------------------------------------------------
@@ -244,4 +257,4 @@ fi
 # 8. Launch training.
 # -----------------------------------------------------------------------------
 export BASE_CKPT
-exec scripts/train_multi_speaker.sh "${TRAIN_SPEAKERS[@]}"
+exec scripts/train/train_multi_speaker.sh "${TRAIN_SPEAKERS[@]}"
