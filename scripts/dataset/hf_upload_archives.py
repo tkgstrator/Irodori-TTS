@@ -8,7 +8,7 @@ The old `speakers/<name>/{manifest.jsonl,latents/*}` tree is deleted in the
 same commit, so clients can no longer see the raw per-file layout.
 
 Usage:
-    uv run python scripts/hf_upload_archives.py \
+    uv run python scripts/dataset/hf_upload_archives.py \
         --repo-id ultemica/irodori-tts-voices \
         --archive-dir data/_archives
 """
