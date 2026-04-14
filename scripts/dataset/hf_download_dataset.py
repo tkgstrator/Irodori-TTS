@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Download per-speaker tar.gz archives from a HF dataset repo and extract.
 
-Remote layout (as uploaded by scripts/hf_upload_archives.py):
+Remote layout (as uploaded by scripts/dataset/hf_upload_archives.py):
     archives/<speaker>.tar.gz
 
 Local layout after extraction:
@@ -14,7 +14,7 @@ speaker, avoiding the 1000 req / 5 min rate limit that hits us when we fetch
 thousands of individual .pt files.
 
 Usage:
-    uv run python scripts/hf_download_dataset.py \\
+    uv run python scripts/dataset/hf_download_dataset.py \\
         --repo-id ultemica/irodori-tts-voices \\
         [--speakers margo,leia]
 """

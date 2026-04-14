@@ -13,7 +13,7 @@ Only latents referenced from the manifest are included (ema has a subsetted
 manifest that points to ~500 of 4681 latents — we ship just those).
 
 Usage:
-    uv run python scripts/make_speaker_archives.py \
+    uv run python scripts/dataset/make_speaker_archives.py \
         --speakers ema,sherry,hiro,margo,leia,coco,alisa,hanna,meruru,nanoka,miria,noah,yuki,anan,cherry
 """
 from __future__ import annotations

@@ -40,6 +40,6 @@ COPY configs ./configs
 COPY scripts ./scripts
 COPY docker/train/entrypoint.sh ./entrypoint.sh
 
-RUN chmod +x entrypoint.sh scripts/train/train_multi_speaker.sh scripts/preprocess/batch_preprocess_voice.sh scripts/ops/backup_wandb_volume.sh
+RUN chmod +x entrypoint.sh scripts/train/train_multi_speaker.sh scripts/preprocess/batch_preprocess_voice.sh
 
 ENTRYPOINT ["./entrypoint.sh"]
