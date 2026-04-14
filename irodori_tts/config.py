@@ -1,5 +1,5 @@
 import json
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -126,16 +126,24 @@ class TrainConfig:
     muon_adjust_lr_fn: str = "match_rms_adamw"
     lr_scheduler: str = "none"
     warmup_steps: int = 0
+    warmup_ratio: float | None = None
     caption_warmup: bool = False
     caption_warmup_steps: int = 0
     stable_steps: int = 0
+    decay_ratio: float | None = None
     min_lr_scale: float = 0.1
     max_steps: int = 200000
+    max_epochs: int | None = None
     log_every: int = 100
     save_every: int = 1000
     checkpoint_best_n: int = 0
     valid_ratio: float = 0.0
     valid_every: int = 0
+    early_stop_enabled: bool = False
+    early_stop_min_step: int = 1000
+    early_stop_patience: int = 20
+    early_stop_min_delta: float = 1e-3
+    early_stop_regression_ratio: float = 0.10
     progress: bool = True
     progress_all_ranks: bool = False
     precision: str = "bf16"
@@ -191,6 +199,34 @@ class SamplingConfig:
     seed: int = 0
 
 
+@dataclass
+class SamplePromptConfig:
+    name: str
+    text: str
+    caption: str | None = None
+    ref_wav: str | None = None
+    no_ref: bool = True
+    seconds: float = 8.0
+    seed: int | None = 42
+
+
+@dataclass
+class SampleGenerationConfig:
+    enabled: bool = False
+    every: int = 500
+    on_best_val: bool = True
+    num_steps: int = 32
+    cfg_scale_text: float = 3.0
+    cfg_scale_caption: float = 3.0
+    cfg_scale_speaker: float = 5.0
+    cfg_guidance_mode: str = "independent"
+    codec_repo: str = "Aratako/Semantic-DACVAE-Japanese-32dim"
+    codec_device: str = "cuda"
+    codec_precision: str = "fp32"
+    save_local: bool = True
+    prompts: list[SamplePromptConfig] = field(default_factory=list)
+
+
 def save_json(path: str | Path, payload: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -209,18 +245,52 @@ def load_experiment_yaml(path: str | Path) -> dict[str, Any]:
     Load experiment config YAML. Returns {} for an empty document.
     """
     try:
-        import yaml
+        from pyaml_env import parse_config
     except ImportError as exc:
         raise RuntimeError(
-            "PyYAML is required for --config support. Install with `pip install pyyaml`."
+            "pyaml-env is required for --config support. Install with `pip install pyaml-env`."
         ) from exc
 
-    payload = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    if payload is None:
+    # parse_config expands `${VAR}` / `${VAR:default}` against os.environ so
+    # secrets like WANDB_PROJECT / WANDB_ENTITY can live in env vars instead
+    # of being hardcoded in the yaml. `tag=None` makes the expansion
+    # tagless — no `!ENV` prefix required in the yaml.
+    payload = parse_config(path=str(path), tag=None, default_value="")
+    if payload is None or payload == "":
         return {}
     if not isinstance(payload, dict):
         raise ValueError(f"Config root must be a mapping: {path}")
     return payload
+
+
+def merge_sample_generation_overrides(
+    overrides: dict[str, Any] | None,
+) -> SampleGenerationConfig:
+    """Build a SampleGenerationConfig from a YAML mapping (with prompts as a list)."""
+    if overrides is None:
+        return SampleGenerationConfig()
+    if not isinstance(overrides, dict):
+        raise ValueError("Config section 'sample_generation' must be a mapping.")
+
+    allowed = {f.name for f in fields(SampleGenerationConfig)}
+    unknown = sorted(set(overrides) - allowed)
+    if unknown:
+        raise ValueError(f"Unknown keys in 'sample_generation' config: {unknown}")
+
+    payload = dict(overrides)
+    raw_prompts = payload.pop("prompts", None) or []
+    if not isinstance(raw_prompts, list):
+        raise ValueError("sample_generation.prompts must be a list of mappings.")
+    prompt_fields = {f.name for f in fields(SamplePromptConfig)}
+    prompts: list[SamplePromptConfig] = []
+    for i, item in enumerate(raw_prompts):
+        if not isinstance(item, dict):
+            raise ValueError(f"sample_generation.prompts[{i}] must be a mapping.")
+        bad = sorted(set(item) - prompt_fields)
+        if bad:
+            raise ValueError(f"Unknown keys in sample_generation.prompts[{i}]: {bad}")
+        prompts.append(SamplePromptConfig(**item))
+    return SampleGenerationConfig(prompts=prompts, **payload)
 
 
 def merge_dataclass_overrides(base: T, overrides: dict[str, Any] | None, section: str) -> T:
