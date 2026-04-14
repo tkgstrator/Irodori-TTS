@@ -1,0 +1,191 @@
+# Per-speaker LoRA fine-tuning template for Irodori-TTS-500M-v2.
+#
+# This is the base template consumed by scripts/train/make_speaker_config.py,
+# which copies it to configs/train_500m_v2_<speaker>_lora.yaml and
+# rewrites run-name / save_every / valid_every based on the speaker's
+# manifest row count. Edit values here to change defaults for every
+# speaker at once.
+
+model:
+  # Model architecture must match the base checkpoint
+  # (Aratako/Irodori-TTS-500M-v2). Do not edit unless you are training
+  # a new base model from scratch.
+  latent_dim: 32
+  latent_patch_size: 1
+  text_vocab_size: 99574
+  text_tokenizer_repo: llm-jp/llm-jp-3-150m
+  model_dim: 1280
+  num_layers: 12
+  num_heads: 20
+  mlp_ratio: 2.875
+  text_mlp_ratio: 2.6
+  speaker_mlp_ratio: 2.6
+  text_dim: 512
+  text_layers: 10
+  text_heads: 8
+  speaker_dim: 768
+  speaker_layers: 8
+  speaker_heads: 12
+  speaker_patch_size: 1
+  timestep_embed_dim: 512
+  adaln_rank: 192
+
+train:
+  # --- Batching ---------------------------------------------------------
+  # Effective batch = batch_size * gradient_accumulation_steps * num_gpus.
+  # Small per-GPU batch keeps VRAM usage low on 24GB cards; accumulate
+  # to reach the target effective batch size (here: 8 * 4 = 32 per GPU).
+  batch_size: 8
+  gradient_accumulation_steps: 4
+  num_workers: 4
+  dataloader_persistent_workers: true
+  dataloader_prefetch_factor: 4
+
+  # --- Precision / compile ---------------------------------------------
+  allow_tf32: true
+  compile_model: false
+  precision: bf16
+
+  # --- Optimizer / LR schedule -----------------------------------------
+  # WSD (warmup-stable-decay) schedule: linearly warm up to LR, hold
+  # flat, then linearly decay to min_lr_scale * LR at the end.
+  # warmup_ratio / decay_ratio are fractions of total steps; the
+  # absolute warmup_steps / stable_steps fields are derived at runtime
+  # and left as 0 here.
+  optimizer: adamw
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  lr_scheduler: wsd
+  warmup_ratio: 0.02
+  decay_ratio: 0.10
+  warmup_steps: 0  # overridden by warmup_ratio at runtime
+  stable_steps: 0  # derived from max_steps - warmup - decay at runtime
+  min_lr_scale: 0.01
+
+  # --- Training length --------------------------------------------------
+  # max_epochs is the real knob; max_steps is a hard upper bound in case
+  # the manifest is huge. Early stopping (below) usually terminates the
+  # run well before either limit.
+  max_steps: 5000  # overridden by max_epochs at runtime
+  max_epochs: 200
+  max_text_len: 256
+
+  # --- Condition dropout ------------------------------------------------
+  # text_condition_dropout: standard classifier-free guidance dropout on
+  #   the text prompt — random 10% of steps train with text removed so
+  #   inference-time CFG can interpolate between conditional / unconditional.
+  # speaker_condition_dropout=1.0: ALWAYS drop the reference audio at
+  #   training time. This forces the LoRA to encode speaker identity in
+  #   its own weights instead of leaning on a reference clip, which is
+  #   what makes text-only (no_ref) inference work after fine-tuning.
+  #   Do NOT lower this for speaker LoRA training.
+  text_condition_dropout: 0.1
+  speaker_condition_dropout: 1.0
+
+  # --- Flow matching target --------------------------------------------
+  timestep_stratified: true
+  max_latent_steps: 750
+  fixed_target_latent_steps: 750
+  fixed_target_full_mask: true
+
+  # --- Logging / checkpointing -----------------------------------------
+  # save_every / valid_every are rewritten per-speaker by
+  # make_speaker_config.py so a run emits ~10 checkpoints / ~30 val
+  # points regardless of dataset size.
+  log_every: 5
+  save_every: 200
+  checkpoint_best_n: 3
+  valid_ratio: 0.05
+  valid_every: 50
+
+  # --- Early stopping ---------------------------------------------------
+  # Stops training once val_loss stops improving — LoRA on small
+  # datasets overfits fast, so this is essential for selecting the
+  # right checkpoint by ear rather than by step count.
+  #   min_step          : never stop before this many steps (warmup window)
+  #   patience          : how many val evaluations without improvement
+  #                       before we give up
+  #   min_delta         : val_loss must drop by at least this much to
+  #                       count as "improvement"
+  #   regression_ratio  : if val_loss rises by >10% of best, stop
+  #                       immediately (catches collapse / divergence)
+  early_stop_enabled: true
+  early_stop_min_step: 1000
+  early_stop_patience: 20
+  early_stop_min_delta: 0.001
+  early_stop_regression_ratio: 0.10
+
+  ddp_find_unused_parameters: false
+
+  # --- LoRA ------------------------------------------------------------
+  # lora_r            : rank of the low-rank update matrices. Higher =
+  #                     more capacity / more params / slower, 8–64 is
+  #                     the typical range. 32 is our default for speaker
+  #                     cloning on ~30min–2h of data.
+  # lora_alpha        : scaling factor applied to the LoRA update
+  #                     (effective scale = alpha / r). Keeping alpha = 2*r
+  #                     gives an effective scale of 2.0, which empirically
+  #                     transfers speaker identity without drowning out
+  #                     the base model.
+  # lora_dropout      : dropout on LoRA activations during training. A
+  #                     small amount (0.05) helps regularize on tiny
+  #                     datasets; set 0 for larger corpora.
+  # lora_bias         : which bias terms to train. "none" keeps LoRA
+  #                     purely additive on the weights and leaves all
+  #                     bias terms frozen (lightest / most portable).
+  # lora_target_modules : which layers LoRA adapters are injected into.
+  #                     Presets live in irodori_tts/lora.py:LORA_TARGET_PRESETS.
+  #                     "diffusion_attn_mlp" = diffusion transformer's
+  #                     attention + MLP (wq/wk/wv/wo + w1/w2/w3 and all
+  #                     cross-attn k/v for text/speaker/caption).
+  #                     This is an **empirical default, not A/B measured**.
+  #                     Rationale: attention alone (upstream's diffusion_attn)
+  #                     reallocates what the model attends to but can't do
+  #                     the nonlinear feature shaping that carries speaker
+  #                     timbre — adding the MLP gives that capacity. We
+  #                     deliberately stop short of (a) text/caption/speaker
+  #                     encoders, because touching the linguistic side risks
+  #                     drifting Japanese pronunciation/accent, and (b) the
+  #                     AdaLN shift/scale/gate, which is timestep-conditioned
+  #                     and empirically brittle under LoRA. Worth ablating
+  #                     against diffusion_attn / diffusion_full / all_attn_mlp
+  #                     if you want to push quality further.
+  lora_enabled: true
+  lora_r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  lora_bias: none
+  lora_target_modules: diffusion_attn_mlp
+
+  # --- W&B logging -----------------------------------------------------
+  # Environment variables are resolved at load time by pyaml-env
+  # (`${VAR:default}` syntax), so you can override any of these by
+  # exporting the matching env var (e.g. via .env for docker compose).
+  # The per-speaker run name is set by scripts/train/train_multi_speaker.sh
+  # via --wandb-run-name "${speaker}_lora" at launch time.
+  wandb_enabled: false
+  wandb_project: ${WANDB_PROJECT}
+  wandb_entity: ${WANDB_ENTITY}
+  wandb_mode: ${WANDB_MODE:online}
+
+  seed: 42
+
+# --- Sample generation ------------------------------------------------
+# Synthesize fixed prompts at every checkpoint (and again on each
+# best-val checkpoint) so the user can A/B checkpoints by ear — val_loss
+# alone is not a reliable quality signal for speech.
+#   no_ref: true  -> runs text-only inference, which is the deployment
+#                    mode for speaker LoRA.
+# The `prompts:` list is filled in per speaker by
+# scripts/train/make_speaker_config.py from data/<speaker>/config.yaml's
+# `sample_texts` field — edit the per-speaker config, not this template.
+sample_generation:
+  enabled: true
+  every: 200
+  on_best_val: true
+  num_steps: 40
+  cfg_scale_text: 3.0
+  cfg_scale_speaker: 5.0
+  cfg_guidance_mode: independent
+  codec_device: cuda
+  prompts: []
