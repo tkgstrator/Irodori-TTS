@@ -2,16 +2,17 @@ services:
   tts:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: tkgling/irodori-tts-server:latest
+      dockerfile: docker/runtime/Dockerfile
+    image: tkgling/irodori-tts:latest
     container_name: irodori-tts
     ports:
       - 8765:8765
     volumes:
-      - ./configs/tts_server.yaml:/app/config.yaml:ro
+      - ./configs/runtime.yaml:/app/config.yaml:ro
       - ./models:/app/models:ro
       - ./outputs:/app/outputs:ro
       - hf_cache:/root/.cache/huggingface
+      - tts_venv:/app/.venv
     environment:
       TTS_HOST: 0.0.0.0
       TTS_PORT: 8765
@@ -34,7 +35,7 @@ services:
   train:
     build:
       context: .
-      dockerfile: Dockerfile.train
+      dockerfile: docker/train/Dockerfile
     image: tkgling/irodori-tts-train:latest
     container_name: irodori-tts-train
     env_file:
@@ -68,3 +69,4 @@ services:
 volumes:
   hf_cache:
   train_venv:
+  tts_venv:

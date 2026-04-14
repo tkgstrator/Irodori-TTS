@@ -1,0 +1,36 @@
+services:
+  train:
+    image: tkgling/irodori-tts-train:latest
+    container_name: irodori-tts-train
+    env_file:
+      # Expected keys in .env:
+      #   HF_TOKEN
+      #   WANDB_API_KEY
+      #   WANDB_BASE_URL            (e.g. https://wandb.tkgstrator.work)
+      #   CF_ACCESS_CLIENT_ID       (Cloudflare Access service token)
+      #   CF_ACCESS_CLIENT_SECRET
+      - .env
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      # Override these at `docker compose run` time:
+      #   HF_DATASET: ultemica/irodori-tts-voices
+      #   SPEAKERS: margo,leia
+      #   NUM_GPUS: 8
+      #   NO_RESUME: "true"
+    volumes:
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+      - ./models:/app/models
+      - hf_cache:/root/.cache/huggingface
+      - train_venv:/app/.venv
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  hf_cache:
+  train_venv:
