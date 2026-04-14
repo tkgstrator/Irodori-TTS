@@ -217,3 +217,13 @@ __marimo__/
 
 gradio_outputs/
 gradio_outputs_voicedesign/
+
+# Irodori-TTS training artifacts
+/data/
+/models/
+/outputs/
+/wandb/
+
+# Claude Code runtime state
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
