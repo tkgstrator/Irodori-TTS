@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -202,6 +204,75 @@ def is_lora_adapter_dir(path: str | Path) -> bool:
     return any((candidate / name).is_file() for name in LORA_ADAPTER_STATE_NAMES)
 
 
+def is_lora_safetensors_file(path: str | Path) -> bool:
+    """Return True if `path` is a standalone LoRA .safetensors export."""
+    candidate = Path(path)
+    if not candidate.is_file() or candidate.suffix.lower() != ".safetensors":
+        return False
+    try:
+        from safetensors import safe_open
+    except ImportError:
+        return False
+    try:
+        with safe_open(str(candidate), framework="pt") as f:
+            meta = f.metadata() or {}
+    except Exception:
+        return False
+    return "adapter_config" in meta
+
+
+def is_lora_adapter_path(path: str | Path) -> bool:
+    return is_lora_adapter_dir(path) or is_lora_safetensors_file(path)
+
+
+def read_lora_safetensors_metadata(path: str | Path) -> dict[str, str]:
+    from safetensors import safe_open
+
+    with safe_open(str(path), framework="pt") as f:
+        return dict(f.metadata() or {})
+
+
+def unpack_lora_safetensors(path: str | Path, *, dest_dir: str | Path | None = None) -> Path:
+    """Materialize a single-file LoRA .safetensors into a PEFT-style directory.
+
+    Returns the directory containing ``adapter_config.json`` and
+    ``adapter_model.safetensors`` so PEFT's ``from_pretrained`` can load it.
+    When ``dest_dir`` is ``None`` a throwaway temp directory is created; callers
+    are responsible for cleaning it up if they care.
+    """
+    from safetensors import safe_open
+    from safetensors.torch import save_file
+
+    src = Path(path)
+    if not src.is_file():
+        raise FileNotFoundError(f"LoRA safetensors file not found: {src}")
+
+    with safe_open(str(src), framework="pt") as f:
+        metadata = dict(f.metadata() or {})
+        tensors = {key: f.get_tensor(key) for key in f.keys()}
+
+    adapter_config_raw = metadata.get("adapter_config")
+    if not adapter_config_raw:
+        raise ValueError(
+            f"{src} is not an Irodori-TTS LoRA export "
+            f"(missing 'adapter_config' in safetensors metadata)."
+        )
+    adapter_config = json.loads(adapter_config_raw)
+
+    if dest_dir is None:
+        target = Path(tempfile.mkdtemp(prefix="irodori_lora_"))
+    else:
+        target = Path(dest_dir)
+        target.mkdir(parents=True, exist_ok=True)
+
+    (target / LORA_ADAPTER_CONFIG_NAME).write_text(
+        json.dumps(adapter_config, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    save_file(tensors, str(target / "adapter_model.safetensors"))
+    return target
+
+
 def load_lora_adapter(
     model: TextToLatentRFDiT,
     adapter_path: str | Path,
@@ -209,7 +280,10 @@ def load_lora_adapter(
     is_trainable: bool,
 ) -> torch.nn.Module:
     _, peft_model_cls, _ = _require_peft()
-    return peft_model_cls.from_pretrained(model, str(adapter_path), is_trainable=is_trainable)
+    resolved = Path(adapter_path)
+    if is_lora_safetensors_file(resolved):
+        resolved = unpack_lora_safetensors(resolved)
+    return peft_model_cls.from_pretrained(model, str(resolved), is_trainable=is_trainable)
 
 
 def count_parameters(model: torch.nn.Module) -> tuple[int, int]:

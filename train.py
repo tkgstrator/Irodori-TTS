@@ -19,10 +19,12 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from irodori_tts.config import (
     ModelConfig,
+    SampleGenerationConfig,
     TrainConfig,
     dump_configs,
     load_experiment_yaml,
     merge_dataclass_overrides,
+    merge_sample_generation_overrides,
 )
 from irodori_tts.dataset import LatentTextDataset, TTSCollator
 from irodori_tts.lora import (
@@ -54,6 +56,9 @@ CHECKPOINT_BEST_VAL_LOSS_RE = re.compile(
 )
 SAFETENSORS_CONFIG_META_KEY = "config_json"
 SAFETENSORS_INFERENCE_CONFIG_KEYS = {"max_text_len", "max_caption_len", "fixed_target_latent_steps"}
+
+VALID_MIN_COUNT = 50
+VALID_MAX_COUNT = 100
 
 
 def set_seed(seed: int) -> None:
@@ -96,8 +101,16 @@ def save_checkpoint(
     train_cfg: TrainConfig,
     *,
     base_init: dict | None = None,
+    es_best_val: float | None = None,
+    es_no_improve: int | None = None,
+    manifest_size: int | None = None,
 ) -> None:
     path = Path(path)
+    es_state = {
+        "es_best_val": float(es_best_val) if es_best_val is not None else None,
+        "es_no_improve": int(es_no_improve) if es_no_improve is not None else None,
+    }
+    manifest_meta = {"manifest_size": int(manifest_size) if manifest_size is not None else None}
     if train_config_uses_lora(train_cfg):
         if path.exists():
             _safe_unlink(path)
@@ -112,6 +125,8 @@ def save_checkpoint(
             json.dumps({"base_init": base_init}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        if manifest_size is not None:
+            (path / "manifest_size.txt").write_text(f"{int(manifest_size)}\n", encoding="utf-8")
         torch.save(
             {
                 "step": step,
@@ -120,6 +135,8 @@ def save_checkpoint(
                 "model_config": asdict(model_cfg),
                 "train_config": asdict(train_cfg),
                 "base_init": base_init,
+                **es_state,
+                **manifest_meta,
             },
             path / LORA_TRAINER_STATE_NAME,
         )
@@ -134,6 +151,8 @@ def save_checkpoint(
             "scheduler": None if scheduler is None else scheduler.state_dict(),
             "model_config": asdict(model_cfg),
             "train_config": asdict(train_cfg),
+            **es_state,
+            **manifest_meta,
         },
         path,
     )
@@ -194,6 +213,35 @@ def prune_best_val_loss_checkpoints(
     return checkpoints
 
 
+def _upload_best_checkpoint_artifact(
+    *,
+    wandb_run,
+    path: Path,
+    step: int,
+    val_loss: float,
+) -> None:
+    if wandb_run is None:
+        return
+    try:
+        import wandb
+    except ImportError:
+        return
+    try:
+        artifact_name = f"lora-best-{wandb_run.name}"
+        artifact = wandb.Artifact(
+            name=artifact_name,
+            type="model",
+            metadata={"step": int(step), "val_loss": float(val_loss)},
+        )
+        if path.is_dir():
+            artifact.add_dir(str(path))
+        else:
+            artifact.add_file(str(path))
+        wandb_run.log_artifact(artifact, aliases=["latest", "best"])
+    except Exception as exc:  # pragma: no cover - best-effort upload
+        print(f"warning: failed to upload best checkpoint artifact: {exc}")
+
+
 def maybe_save_best_val_loss_checkpoint(
     *,
     output_dir: Path,
@@ -207,6 +255,9 @@ def maybe_save_best_val_loss_checkpoint(
     model_cfg: ModelConfig,
     train_cfg: TrainConfig,
     base_init: dict | None,
+    es_best_val: float | None = None,
+    es_no_improve: int | None = None,
+    manifest_size: int | None = None,
 ) -> tuple[list[tuple[float, int, Path]], Path | None]:
     if keep_best_n <= 0:
         return checkpoints, None
@@ -235,6 +286,9 @@ def maybe_save_best_val_loss_checkpoint(
         model_cfg=model_cfg,
         train_cfg=train_cfg,
         base_init=base_init,
+        es_best_val=es_best_val,
+        es_no_improve=es_no_improve,
+        manifest_size=manifest_size,
     )
     checkpoints.append((float(val_loss), int(step), path))
     checkpoints = prune_best_val_loss_checkpoints(checkpoints, keep_best_n)
@@ -974,9 +1028,10 @@ def split_train_valid_indices(
         )
 
     valid_count = int(num_samples * valid_ratio)
-    valid_count = max(1, valid_count)
+    valid_count = max(VALID_MIN_COUNT, min(VALID_MAX_COUNT, valid_count))
     if valid_count >= num_samples:
         valid_count = num_samples - 1
+    valid_count = max(1, valid_count)
 
     generator = torch.Generator()
     generator.manual_seed(int(seed))
@@ -1145,6 +1200,12 @@ def main() -> None:
         ),
     )
     parser.add_argument("--max-steps", type=int, default=200000)
+    parser.add_argument(
+        "--max-epochs",
+        type=int,
+        default=None,
+        help="Stop after this many epochs. Overrides --max-steps by computing steps = ceil(epochs * batches_per_epoch / grad_accum).",
+    )
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument(
         "--gradient-accumulation-steps",
@@ -1193,6 +1254,18 @@ def main() -> None:
         help="Number of optimizer steps to run caption-only warmup for when caption_warmup is enabled.",
     )
     parser.add_argument("--stable-steps", type=int, default=0)
+    parser.add_argument(
+        "--warmup-ratio",
+        type=float,
+        default=None,
+        help="If set, warmup_steps = round(max_steps * warmup_ratio). Computed after max_epochs resolves max_steps.",
+    )
+    parser.add_argument(
+        "--decay-ratio",
+        type=float,
+        default=None,
+        help="If set, decay length = round(max_steps * decay_ratio) for WSD scheduler.",
+    )
     parser.add_argument("--min-lr-scale", type=float, default=0.1)
     parser.add_argument("--latent-dim", type=int, default=128)
     parser.add_argument("--latent-patch-size", type=int, default=1)
@@ -1371,13 +1444,14 @@ def main() -> None:
 
     raw_argv = sys.argv[1:]
     exp_cfg = load_experiment_yaml(args.config) if args.config else {}
-    unknown_root = sorted(set(exp_cfg) - {"model", "train"})
+    unknown_root = sorted(set(exp_cfg) - {"model", "train", "sample_generation"})
     if unknown_root:
         raise ValueError(f"Unknown top-level config keys: {unknown_root}")
     if args.config and is_main_process:
         print(f"Loaded config: {args.config}")
     model_cfg = merge_dataclass_overrides(ModelConfig(), exp_cfg.get("model"), section="model")
     train_cfg = merge_dataclass_overrides(TrainConfig(), exp_cfg.get("train"), section="train")
+    sample_cfg = merge_sample_generation_overrides(exp_cfg.get("sample_generation"))
     default_train_cfg = TrainConfig()
 
     train_cfg = replace(train_cfg, manifest_path=args.manifest)
@@ -1431,10 +1505,16 @@ def main() -> None:
         train_cfg = replace(train_cfg, caption_warmup_steps=args.caption_warmup_steps)
     if cli_provided(raw_argv, "--stable-steps"):
         train_cfg = replace(train_cfg, stable_steps=args.stable_steps)
+    if cli_provided(raw_argv, "--warmup-ratio"):
+        train_cfg = replace(train_cfg, warmup_ratio=args.warmup_ratio)
+    if cli_provided(raw_argv, "--decay-ratio"):
+        train_cfg = replace(train_cfg, decay_ratio=args.decay_ratio)
     if cli_provided(raw_argv, "--min-lr-scale"):
         train_cfg = replace(train_cfg, min_lr_scale=args.min_lr_scale)
     if cli_provided(raw_argv, "--max-steps"):
         train_cfg = replace(train_cfg, max_steps=args.max_steps)
+    if cli_provided(raw_argv, "--max-epochs"):
+        train_cfg = replace(train_cfg, max_epochs=args.max_epochs)
     if cli_provided(raw_argv, "--text-condition-dropout"):
         train_cfg = replace(train_cfg, text_condition_dropout=args.text_condition_dropout)
     if cli_provided(raw_argv, "--caption-condition-dropout"):
@@ -1612,17 +1692,28 @@ def main() -> None:
                 "W&B logging is enabled, but `wandb` is not installed. "
                 "Install it with `pip install wandb`."
             ) from exc
+        wandb_settings = None
+        cf_id = os.environ.get("CF_ACCESS_CLIENT_ID")
+        cf_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET")
+        if cf_id and cf_secret:
+            wandb_settings = wandb.Settings(
+                x_extra_http_headers={
+                    "CF-Access-Client-Id": cf_id,
+                    "CF-Access-Client-Secret": cf_secret,
+                }
+            )
         wandb_run = wandb.init(
-            project=train_cfg.wandb_project,
-            entity=train_cfg.wandb_entity,
-            name=train_cfg.wandb_run_name,
-            mode=train_cfg.wandb_mode,
+            project=train_cfg.wandb_project or None,
+            entity=train_cfg.wandb_entity or None,
+            name=train_cfg.wandb_run_name or None,
+            mode=train_cfg.wandb_mode or "online",
             dir=str(output_dir),
             config={
                 "model": asdict(model_cfg),
                 "train": asdict(train_cfg),
                 "script": "train.py",
             },
+            settings=wandb_settings,
         )
         print(
             f"W&B enabled: project={train_cfg.wandb_project} mode={train_cfg.wandb_mode} run={wandb_run.name if wandb_run is not None else train_cfg.wandb_run_name}"
@@ -1690,6 +1781,7 @@ def main() -> None:
         show_manifest_progress=bool(train_cfg.progress and is_main_process),
         manifest_progress_desc="Index Manifest",
     )
+    manifest_size = len(full_dataset)
     train_dataset = full_dataset
     valid_dataset = None
     if train_cfg.valid_ratio > 0.0:
@@ -1718,7 +1810,8 @@ def main() -> None:
         )
         if is_main_process:
             print(
-                f"Validation split enabled: train={len(train_dataset)} valid={len(valid_dataset)} (ratio={train_cfg.valid_ratio:.4f}, valid_every={train_cfg.valid_every} steps)."
+                f"Validation split enabled: train={len(train_dataset)} valid={len(valid_dataset)} "
+                f"(ratio={train_cfg.valid_ratio:.4f}, clamp=[{VALID_MIN_COUNT},{VALID_MAX_COUNT}], valid_every={train_cfg.valid_every} steps)."
             )
     drop_last = len(train_dataset) >= train_cfg.batch_size
     if not drop_last and is_main_process:
@@ -1793,6 +1886,38 @@ def main() -> None:
     )
     if len(loader) == 0:
         raise ValueError("Dataloader yielded zero batches. Check manifest and batch_size settings.")
+    if train_cfg.max_epochs is not None:
+        import math
+        grad_accum = max(1, train_cfg.gradient_accumulation_steps)
+        optim_steps_per_epoch = max(1, math.ceil(len(loader) / grad_accum))
+        derived_max_steps = train_cfg.max_epochs * optim_steps_per_epoch
+        if rank == 0:
+            print(
+                f"[max_epochs={train_cfg.max_epochs}] batches_per_epoch={len(loader)}, "
+                f"grad_accum={grad_accum}, optim_steps_per_epoch={optim_steps_per_epoch}, "
+                f"derived max_steps={derived_max_steps} (was {train_cfg.max_steps})"
+            )
+        train_cfg = replace(train_cfg, max_steps=derived_max_steps)
+    if train_cfg.warmup_ratio is not None or train_cfg.decay_ratio is not None:
+        ms = int(train_cfg.max_steps)
+        warmup = (
+            int(round(ms * float(train_cfg.warmup_ratio)))
+            if train_cfg.warmup_ratio is not None
+            else int(train_cfg.warmup_steps)
+        )
+        decay = (
+            int(round(ms * float(train_cfg.decay_ratio)))
+            if train_cfg.decay_ratio is not None
+            else max(0, ms - warmup - int(train_cfg.stable_steps))
+        )
+        stable = max(0, ms - warmup - decay)
+        if rank == 0:
+            print(
+                f"[lr_schedule_ratio] max_steps={ms} warmup={warmup} "
+                f"stable={stable} decay={decay} "
+                f"(warmup_ratio={train_cfg.warmup_ratio}, decay_ratio={train_cfg.decay_ratio})"
+            )
+        train_cfg = replace(train_cfg, warmup_steps=warmup, stable_steps=stable)
     valid_loader = None
     valid_sampler = None
     if valid_dataset is not None:
@@ -1820,7 +1945,7 @@ def main() -> None:
     checkpoint_retention_enabled = train_cfg.checkpoint_best_n > 0
     periodic_checkpoint_keep = 0
     if checkpoint_retention_enabled:
-        periodic_checkpoint_keep = 1 if has_validation else int(train_cfg.checkpoint_best_n) + 1
+        periodic_checkpoint_keep = 10_000 if has_validation else int(train_cfg.checkpoint_best_n) + 1
     best_val_checkpoints: list[tuple[float, int, Path]] = []
     if is_main_process:
         if checkpoint_retention_enabled and has_validation:
@@ -1830,7 +1955,7 @@ def main() -> None:
                 train_cfg.checkpoint_best_n,
             )
         if checkpoint_retention_enabled and has_validation:
-            print(f"Checkpoint retention: latest=1 + best_val_loss={train_cfg.checkpoint_best_n}.")
+            print(f"Checkpoint retention: periodic_keep={periodic_checkpoint_keep} + best_val_loss={train_cfg.checkpoint_best_n}.")
         elif checkpoint_retention_enabled:
             print(
                 f"Checkpoint retention: validation disabled, keep latest {periodic_checkpoint_keep} periodic checkpoints."
@@ -1976,6 +2101,8 @@ def main() -> None:
 
     step = 0
     progress: TrainProgress | None = None
+    resumed_es_best_val: float | None = None
+    resumed_es_no_improve: int | None = None
     if args.resume is not None:
         ckpt = _load_checkpoint_payload(resume_path, map_location=device)
         if not train_config_uses_lora(train_cfg):
@@ -1988,8 +2115,61 @@ def main() -> None:
                 scheduler.load_state_dict(scheduler_state)
             elif step > 0:
                 scheduler.last_step = step
+        raw_best = ckpt.get("es_best_val")
+        raw_no_improve = ckpt.get("es_no_improve")
+        if raw_best is not None:
+            resumed_es_best_val = float(raw_best)
+        if raw_no_improve is not None:
+            resumed_es_no_improve = int(raw_no_improve)
         if is_main_process:
-            print(f"Resumed from step={step}")
+            print(
+                f"Resumed from step={step}"
+                + (
+                    f" es_best_val={resumed_es_best_val:.6f} es_no_improve={resumed_es_no_improve}"
+                    if resumed_es_best_val is not None and resumed_es_no_improve is not None
+                    else ""
+                )
+            )
+
+    sampling_codec = None
+    if sample_cfg.enabled and is_main_process and sample_cfg.prompts:
+        from irodori_tts.training_samples import load_codec_for_sampling
+
+        sampling_codec = load_codec_for_sampling(
+            sample_cfg,
+            expected_latent_dim=model_cfg.latent_dim,
+        )
+        print(
+            f"Sample generation enabled: every={sample_cfg.every} prompts={len(sample_cfg.prompts)} "
+            f"codec_device={sample_cfg.codec_device}"
+        )
+    elif sample_cfg.enabled and is_main_process and not sample_cfg.prompts:
+        print("warning: sample_generation.enabled=true but prompts list is empty; disabling.")
+
+    last_sampled_step: list[int] = [-1]
+
+    def _maybe_emit_samples(current_step: int) -> None:
+        if sampling_codec is None:
+            return
+        if current_step == last_sampled_step[0]:
+            return
+        last_sampled_step[0] = current_step
+        from irodori_tts.training_samples import generate_training_samples
+
+        generate_training_samples(
+            raw_model=raw_model,
+            model_cfg=model_cfg,
+            train_cfg=train_cfg,
+            sample_cfg=sample_cfg,
+            tokenizer=tokenizer,
+            caption_tokenizer=caption_tokenizer,
+            codec=sampling_codec,
+            model_device=device,
+            step=current_step,
+            output_dir=output_dir,
+            wandb_run=wandb_run,
+            log_fn=lambda msg: progress.write(msg) if progress is not None else None,
+        )
 
     progress = TrainProgress(
         max_steps=train_cfg.max_steps,
@@ -2014,6 +2194,42 @@ def main() -> None:
             f"{train_cfg.caption_warmup_steps} optimizer steps."
         )
 
+    es_enabled = bool(train_cfg.early_stop_enabled) and has_validation
+    es_best_val: float = float("inf")
+    es_no_improve: int = 0
+    stop_early: bool = False
+    if resumed_es_best_val is not None:
+        es_best_val = resumed_es_best_val
+    if resumed_es_no_improve is not None:
+        es_no_improve = resumed_es_no_improve
+    if es_enabled and is_main_process:
+        print(
+            "Early stopping enabled: "
+            f"min_step={train_cfg.early_stop_min_step} "
+            f"patience={train_cfg.early_stop_patience} "
+            f"min_delta={train_cfg.early_stop_min_delta} "
+            f"regression_ratio={train_cfg.early_stop_regression_ratio}"
+        )
+    if args.resume is not None and step >= train_cfg.max_steps:
+        stop_early = True
+        if is_main_process:
+            print(
+                f"resume: step={step} already >= max_steps={train_cfg.max_steps}; exiting without further training."
+            )
+    elif (
+        args.resume is not None
+        and es_enabled
+        and step >= train_cfg.early_stop_min_step
+        and es_no_improve >= train_cfg.early_stop_patience
+    ):
+        stop_early = True
+        if is_main_process:
+            print(
+                f"resume: early-stop condition already met "
+                f"(es_no_improve={es_no_improve} >= patience={train_cfg.early_stop_patience}); "
+                f"exiting without further training."
+            )
+
     try:
         model.train()
         if scheduler is not None and step == 0:
@@ -2024,7 +2240,7 @@ def main() -> None:
         accum_loss = torch.zeros((), device=device, dtype=torch.float32)
         accum_rf_loss = torch.zeros((), device=device, dtype=torch.float32)
         epoch = 0
-        while step < train_cfg.max_steps:
+        while step < train_cfg.max_steps and not stop_early:
             if train_sampler is not None:
                 train_sampler.set_epoch(epoch)
             epoch += 1
@@ -2194,11 +2410,16 @@ def main() -> None:
                         model_cfg,
                         train_cfg,
                         base_init=base_init,
+                        es_best_val=es_best_val,
+                        es_no_improve=es_no_improve,
+                        manifest_size=manifest_size,
                     )
                     enforce_periodic_checkpoint_limit(
                         output_dir=output_dir,
                         keep_count=periodic_checkpoint_keep,
                     )
+                    if sample_cfg.enabled and sample_cfg.every > 0 and step % sample_cfg.every == 0:
+                        _maybe_emit_samples(step)
 
                 if (
                     valid_loader is not None
@@ -2230,6 +2451,41 @@ def main() -> None:
                                 },
                                 step=step,
                             )
+                        if es_enabled:
+                            cur_val = float(valid_metrics["loss"])
+                            if cur_val < es_best_val - train_cfg.early_stop_min_delta:
+                                es_best_val = cur_val
+                                es_no_improve = 0
+                            else:
+                                es_no_improve += 1
+                            if wandb_run is not None:
+                                wandb_run.log(
+                                    {
+                                        "es/no_improve": es_no_improve,
+                                        "es/best_val": es_best_val,
+                                    },
+                                    step=step,
+                                )
+                            if step >= train_cfg.early_stop_min_step:
+                                if es_no_improve >= train_cfg.early_stop_patience:
+                                    progress.write(
+                                        f"early stop: patience ({es_no_improve} "
+                                        f">= {train_cfg.early_stop_patience}) at step={step} "
+                                        f"best_val={es_best_val:.6f}"
+                                    )
+                                    stop_early = True
+                                elif (
+                                    es_best_val < float("inf")
+                                    and cur_val > es_best_val * (1.0 + train_cfg.early_stop_regression_ratio)
+                                ):
+                                    progress.write(
+                                        f"early stop: regression "
+                                        f"({cur_val:.6f} > best {es_best_val:.6f} * "
+                                        f"{1.0 + train_cfg.early_stop_regression_ratio:.2f}) "
+                                        f"at step={step}"
+                                    )
+                                    stop_early = True
+
                         best_val_checkpoints, best_path = maybe_save_best_val_loss_checkpoint(
                             output_dir=output_dir,
                             checkpoints=best_val_checkpoints,
@@ -2242,6 +2498,9 @@ def main() -> None:
                             model_cfg=model_cfg,
                             train_cfg=train_cfg,
                             base_init=base_init,
+                            es_best_val=es_best_val,
+                            es_no_improve=es_no_improve,
+                            manifest_size=manifest_size,
                         )
                         if best_path is not None:
                             progress.write(
@@ -2250,8 +2509,16 @@ def main() -> None:
                                     float(valid_metrics["loss"]),
                                 )
                             )
+                            _upload_best_checkpoint_artifact(
+                                wandb_run=wandb_run,
+                                path=best_path,
+                                step=step,
+                                val_loss=float(valid_metrics["loss"]),
+                            )
+                            if sample_cfg.enabled and sample_cfg.on_best_val:
+                                _maybe_emit_samples(step)
 
-                if step >= train_cfg.max_steps:
+                if step >= train_cfg.max_steps or stop_early:
                     break
 
         if (
@@ -2296,6 +2563,9 @@ def main() -> None:
                     model_cfg=model_cfg,
                     train_cfg=train_cfg,
                     base_init=base_init,
+                    es_best_val=es_best_val,
+                    es_no_improve=es_no_improve,
+                    manifest_size=manifest_size,
                 )
                 if best_path is not None:
                     progress.write(
@@ -2304,6 +2574,14 @@ def main() -> None:
                             float(valid_metrics["loss"]),
                         )
                     )
+                    _upload_best_checkpoint_artifact(
+                        wandb_run=wandb_run,
+                        path=best_path,
+                        step=step,
+                        val_loss=float(valid_metrics["loss"]),
+                    )
+                    if sample_cfg.enabled and sample_cfg.on_best_val:
+                        _maybe_emit_samples(step)
 
         if is_main_process:
             save_checkpoint(
@@ -2315,13 +2593,20 @@ def main() -> None:
                 model_cfg,
                 train_cfg,
                 base_init=base_init,
+                es_best_val=es_best_val,
+                es_no_improve=es_no_improve,
+                manifest_size=manifest_size,
             )
+            if sample_cfg.enabled:
+                _maybe_emit_samples(step)
             if wandb_run is not None:
                 wandb_run.summary["train/final_step"] = step
             progress.write(f"Training finished at step={step}.")
     finally:
         if progress is not None:
             progress.close()
+        if sampling_codec is not None:
+            del sampling_codec
         if wandb_run is not None:
             wandb_run.finish()
         if distributed and dist.is_initialized():
