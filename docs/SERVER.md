@@ -55,9 +55,9 @@ lora_dir: data/LoRA
 
 ```bash
 uv run python scripts/lora/export_lora_to_safetensors.py \
-  --input  outputs/cherry_lora/checkpoint_best_val_loss_0002400_0.312100 \
-  --output data/LoRA/cherry.safetensors \
-  --name   "花京院ちえり" \
+  --input  outputs/<speaker>_lora/checkpoint_best_val_loss_0002400_0.312100 \
+  --output data/LoRA/<speaker>.safetensors \
+  --name   "<表示名>" \
   --defaults '{"num_steps": 40, "cfg_scale_text": 3.0, "cfg_scale_speaker": 5.0}'
 ```
 
@@ -108,7 +108,7 @@ uv run python tts_server.py \
 ### ビルド
 
 ```bash
-docker build -f docker/runtime/Dockerfile -t tkgling/irodori-tts .
+docker build -f docker/runtime/Dockerfile -t <org>/irodori-tts .
 ```
 
 ### compose 例 (`docker/runtime/compose.yaml` 同梱)
@@ -116,7 +116,7 @@ docker build -f docker/runtime/Dockerfile -t tkgling/irodori-tts .
 ```yaml
 services:
   tts:
-    image: tkgling/irodori-tts:latest
+    image: <org>/irodori-tts:latest
     container_name: irodori-tts
     ports:
       - 8765:8765
@@ -174,8 +174,8 @@ docker compose -f docker/runtime/compose.yaml logs -f
 {
   "speakers": [
     {
-      "uuid": "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb",
-      "name": "花京院ちえり",
+      "uuid": "00000000-0000-0000-0000-000000000000",
+      "name": "<話者表示名>",
       "defaults": {"num_steps": 40, "cfg_scale_text": 3.0, "cfg_scale_speaker": 5.0}
     }
   ]
@@ -188,7 +188,7 @@ docker compose -f docker/runtime/compose.yaml logs -f
 
 ```json
 {
-  "speaker_id": "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb",
+  "speaker_id": "00000000-0000-0000-0000-000000000000",
   "text": "こんにちは、今日はいい天気ですね。",
   "seed": 42,
   "num_steps": 40,
