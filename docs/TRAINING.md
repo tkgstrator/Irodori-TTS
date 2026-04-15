@@ -12,11 +12,13 @@
 <repo root>/
 ├── margo/
 │   ├── manifest.jsonl   # 必須: 学習マニフェスト
+│   ├── config.yaml      # 話者メタデータ（前処理・config 生成が参照）
 │   └── latents/         # 必須: DACVAE 事前エンコード済み潜在
 │       ├── 00000000_00000000.pt
 │       └── ...
 ├── leia/
 │   ├── manifest.jsonl
+│   ├── config.yaml
 │   └── latents/
 └── ...
 ```
@@ -42,15 +44,20 @@
 - shape は `(latent_dim=32, num_frames)` で、1 サンプル = 1 ファイル。
 - 生 wav はアップロード不要(学習ループは潜在だけ読みます)。
 
-> **作り方**: ローカルで wav を揃えたあと、`prepare_manifest.py` を使うと `latents/` と `manifest.jsonl` の両方を一度に生成できます。
+> **作り方**: `prepare_manifest.py` が HuggingFace dataset を入力に取り、DACVAE 潜在 (`latents/*.pt`) と `manifest.jsonl` を一度に生成します。実体は HF `datasets` 経由で audio/text カラムを読むので、ソースは HF repo でも `--data-files` を使ったローカル JSONL でも構いません。
 
 ```bash
 uv run --no-sync python prepare_manifest.py \
-  --metadata   data/<speaker>/metadata.jsonl \
-  --audio-root data/<speaker>/wavs \
-  --output     data/<speaker>/manifest.jsonl \
-  --latent-dir data/<speaker>/latents
+  --dataset         myorg/my_dataset \
+  --split           train \
+  --audio-column    audio \
+  --text-column     text \
+  --output-manifest data/<speaker>/manifest.jsonl \
+  --latent-dir      data/<speaker>/latents \
+  --device          cuda
 ```
+
+ローカルで wav + 書き起こしまで済ませたい場合は、前段として `tts-preprocess` スキル（`scripts/preprocess/`）で `data/<speaker>/{wavs/, metadata.jsonl}` を作り、それを HF repo に push してから上記コマンドを回すのが定番ルートです。
 
 ### `config.yaml`（話者メタデータ）
 
@@ -73,27 +80,31 @@ sample_texts:                # checkpoint A/B 試聴用の固定プロンプト
   - わかった、それじゃあ後で連絡するね。
 ```
 
-- **`cleaning.first_person`** — 話者が使う一人称。LLM クリーニングは音響的に近い変種（例: `私`⇄`わたし`⇄`あたし`、`僕`⇄`ボク`、`わがはい`⇄`我輩`/`吾輩`）だけを canonical 形に寄せる。音響的に遠い語（`俺` → `私`）は誤認識ではなく別の原因の可能性が高いので置換しない。
-- **`cleaning.addressing`** — 他話者への呼びかけ形式:
-  - `chan` / `san` / `kun` — 該当の敬称が付いていれば人名の強い手掛かりになる
-  - `yobisute` — 敬称を付けずに呼び捨てる。バッチ中の裸の名前も呼称である可能性があるという判定に使う
-- **`sample_texts`** — `make_speaker_config.py` が `sample_generation.prompts` に展開する。話者の特徴が出る台詞を入れると ckpt 比較がしやすい。空だとエラーになる。
+- **`speaker.id`** — ディレクトリ名と一致させる短い識別子。
+- **`speaker.name`** — 正規フルネーム（任意）。
+- **`cleaning.first_person`** — 話者が使う規定の一人称（例: `私`, `ボク`, `あたし`）。LLM クリーニングの判断材料として読まれる。
+- **`cleaning.addressing`** — 他者への呼びかけ形式。`chan` / `san` / `kun` / `yobisute` のいずれか。
+- **`sample_texts`** — checkpoint A/B 試聴用の固定プロンプト。`make_speaker_config.py` が `sample_generation.prompts` に展開する。空だとエラー。
 
 ### HuggingFace へのアップロード
 
-同梱の `scripts/dataset/hf_upload_dataset.py` で、`data/` 配下の全話者(または `--speakers` で指定したサブセット)を 1 つの repo にまとめて push できます。
+HF Hub には **話者ごとに 1 つの `tar.gz` アーカイブ**としてアップロードします。無圧縮で `latents/*.pt` を数千ファイル単位で上げると、ダウンロード側が HF の xet-read-token rate limit (1000 req / 5 min) に当たってまともに pull できないため、アーカイブ化は必須です。
+
+二段構え:
 
 ```bash
-# 全話者をまとめて push
-uv run --no-sync python scripts/dataset/hf_upload_dataset.py \
-  --repo-id <org>/irodori-tts-voices --private
+# 1. 話者ごとに manifest + 参照された latents だけを tar.gz にまとめる
+uv run --no-sync python scripts/dataset/make_speaker_archives.py \
+  --speakers margo,leia,coco
 
-# 一部の話者だけ push / 追加
-uv run --no-sync python scripts/dataset/hf_upload_dataset.py \
-  --repo-id <org>/irodori-tts-voices --speakers margo,leia --private
+# 2. archives/<speaker>.tar.gz として HF repo に push（旧 speakers/ ツリーは同 commit で削除）
+uv run --no-sync python scripts/dataset/hf_upload_archives.py \
+  --repo-id <org>/irodori-tts-voices
 ```
 
-`HF_TOKEN` を環境変数 or `.env` に入れておけば自動で認証されます。1 話者あたり目安 10〜30MB。wav・ログ・中間ファイルは除外されます。
+出力は `data/_archives/<speaker>.tar.gz`、repo 側では `archives/<speaker>.tar.gz` に配置されます。学習コンテナの `entrypoint.sh` は `scripts/dataset/hf_download_dataset.py` 経由でアーカイブを 1 話者 1 リクエストで pull し、ローカルで展開します。
+
+`HF_TOKEN` を環境変数 or `.env` に入れておけば自動で認証されます。wav・ログ・中間ファイルはアーカイブに含まれません。
 
 ---
 
@@ -113,16 +124,23 @@ docker compose build train
 
 ### 3.1 環境変数
 
-| 変数              | 必須 | 説明                                                                                                 |
-|-------------------|------|------------------------------------------------------------------------------------------------------|
-| `HF_TOKEN`        | ◯    | HF private dataset を pull するためのトークン                                                        |
-| `WANDB_API_KEY`   | 任意 | 指定すると online mode で W&B に自動ログインされ、進捗報告される                                     |
-| `HF_DATASET`      | △    | 学習前に pull する HF dataset repo ID(全話者入りの単一 repo)。未指定なら `data/` にあるものをそのまま使う |
-| `SPEAKERS`        | 任意 | カンマ区切りの話者名。`HF_DATASET` と併用するとその話者だけ pull。学習時も `SPEAKERS` に列挙された話者だけが対象(未指定なら `data/` 配下の全話者) |
-| `BASE_MODEL_REPO` | 任意 | ベースチェックポイント repo。デフォルト: `Aratako/Irodori-TTS-500M-v2`                               |
-| `BASE_CKPT`       | 任意 | ベースチェックポイントのコンテナ内パス                                                               |
-| `NUM_GPUS`        | 任意 | 利用する GPU の数(整数)。指定すると index `0..NUM_GPUS-1` を自動割当                              |
-| `GPUS`            | 任意 | 利用する GPU index をスペース区切り(例: `"0 1 2 3"`)。`NUM_GPUS` より優先。未指定なら見えてる GPU 全部 |
+| 変数                      | 必須 | 説明                                                                                                 |
+|---------------------------|------|------------------------------------------------------------------------------------------------------|
+| `HF_TOKEN`                | △    | HF private dataset / private base checkpoint を pull するときに必要。`data/` をローカルマウントし、public なベースモデルを使うだけなら不要 |
+| `HF_DATASET`              | △    | 学習前に pull する HF dataset repo ID(全話者入りの単一 repo)。未指定なら `data/` にあるものをそのまま使う |
+| `SPEAKERS`                | 任意 | カンマ区切りの話者名。`HF_DATASET` と併用するとその話者だけ pull。学習時も `SPEAKERS` に列挙された話者だけが対象(未指定なら `data/` 配下の全話者) |
+| `BASE_MODEL_REPO`         | 任意 | ベースチェックポイント repo。デフォルト: `Aratako/Irodori-TTS-500M-v2`                               |
+| `BASE_CKPT`               | 任意 | ベースチェックポイントのコンテナ内パス                                                               |
+| `NUM_GPUS`                | 任意 | 利用する GPU の数(整数)。指定すると index `0..NUM_GPUS-1` を自動割当                              |
+| `GPUS`                    | 任意 | 利用する GPU index をスペース区切り(例: `"0 1 2 3"`)。`NUM_GPUS` より優先。未指定なら見えてる GPU 全部 |
+| `NO_RESUME`               | 任意 | `true` で既存 checkpoint を無視して最初から学習。未指定なら `outputs/<speaker>_lora/checkpoint_*` から自動 resume |
+| `WANDB_API_KEY`           | 任意 | 指定すると online mode で W&B に自動ログインされる                                                   |
+| `WANDB_BASE_URL`          | 任意 | self-hosted W&B サーバの URL(例: `https://wandb.tkgstrator.work`)。未指定なら public `wandb.ai` |
+| `WANDB_PROJECT`           | 任意 | W&B プロジェクト名。yaml 側で `${WANDB_PROJECT}` として参照される(pyaml-env が展開)                |
+| `WANDB_ENTITY`            | 任意 | W&B entity (user / team)。同上。未指定なら W&B のデフォルト entity にフォールバック                  |
+| `WANDB_MODE`              | 任意 | `online` / `offline` / `disabled`。同上。未指定なら `online`                                        |
+| `CF_ACCESS_CLIENT_ID`     | 任意 | `WANDB_BASE_URL` が Cloudflare Access の背後にある場合の service token。`train.py` が `CF-Access-*` header として付与 |
+| `CF_ACCESS_CLIENT_SECRET` | 任意 | 同上(secret 側)                                                                                   |
 
 ### 3.2 `compose.yaml` の例
 
@@ -192,7 +210,7 @@ docker compose run --rm train
 
 ## 4. コンテナ内部の処理フロー
 
-`scripts/entrypoint.sh` が以下を順に実行します。
+`docker/train/entrypoint.sh` が以下を順に実行します。
 
 1. ベースチェックポイントを HF から pull(既に存在すればスキップ)
 2. `HF_DATASET` から dataset repo を pull(`SPEAKERS` 指定時はそれに該当するサブディレクトリだけを `allow_patterns` で pull)
@@ -260,7 +278,7 @@ compose の `environment:` で指定する例:
 environment:
   HF_DATASET: ultemica/irodori-tts-voices
   NUM_GPUS: 8
-  MAX_EPOCHS: 80           # 50 -> 80 に延長
+  MAX_EPOCHS: 100          # template の 200 から短縮
   LEARNING_RATE: 5e-5      # 1e-4 -> 5e-5 に下げる
   LORA_R: 64               # rank を上げる
   LORA_ALPHA: 128

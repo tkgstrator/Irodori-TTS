@@ -28,12 +28,9 @@ import yaml
 
 TEMPLATE = Path("configs/train_500m_v2_speaker_lora.yaml")
 
-# Must match the template values below. If you change either in the template,
-# update these constants too.
-BATCH_SIZE = 8
-GRAD_ACCUM = 4
-MAX_EPOCHS = 50
-VALID_RATIO = 0.02
+# Targets for how many ckpts / val points a run should emit. These drive
+# save_every / valid_every derivation below. Everything else (batch size,
+# epochs, valid_ratio) is read from the template so there is no drift.
 TARGET_CKPTS = 10
 TARGET_VAL_POINTS = 30
 
@@ -47,12 +44,17 @@ def count_rows(path: Path) -> int:
     return n
 
 
-def compute_schedule(n_rows: int) -> tuple[int, int, int]:
-    """Return (save_every, valid_every, total_steps)."""
-    train_n = n_rows - max(1, round(n_rows * VALID_RATIO))
-    batches_per_epoch = math.ceil(train_n / BATCH_SIZE)
-    steps_per_epoch = math.ceil(batches_per_epoch / GRAD_ACCUM)
-    total_steps = steps_per_epoch * MAX_EPOCHS
+def compute_schedule(n_rows: int, template_cfg: dict) -> tuple[int, int, int]:
+    """Return (save_every, valid_every, total_steps) derived from the template."""
+    train_cfg = template_cfg.get("train", {})
+    batch_size = int(train_cfg["batch_size"])
+    grad_accum = int(train_cfg["gradient_accumulation_steps"])
+    max_epochs = int(train_cfg["max_epochs"])
+    valid_ratio = float(train_cfg.get("valid_ratio", 0.02))
+    train_n = n_rows - max(1, round(n_rows * valid_ratio))
+    batches_per_epoch = math.ceil(train_n / batch_size)
+    steps_per_epoch = math.ceil(batches_per_epoch / grad_accum)
+    total_steps = steps_per_epoch * max_epochs
     save_every = max(1, total_steps // TARGET_CKPTS)
     valid_every = max(1, total_steps // TARGET_VAL_POINTS)
     return save_every, valid_every, total_steps
@@ -102,12 +104,13 @@ def main() -> None:
     if not manifest_path.is_file():
         raise SystemExit(f"manifest not found: {manifest_path}")
     n_rows = count_rows(manifest_path)
-    save_every, valid_every, total_steps = compute_schedule(n_rows)
+
+    src_text = TEMPLATE.read_text(encoding="utf-8")
+    template_cfg = yaml.safe_load(src_text) or {}
+    save_every, valid_every, total_steps = compute_schedule(n_rows, template_cfg)
 
     speaker_cfg = load_speaker_config(args.speaker)
     sample_texts = speaker_cfg["sample_texts"]
-
-    src_text = TEMPLATE.read_text(encoding="utf-8")
     out_text = re.sub(r"^(\s*save_every:\s*)\d+", rf"\g<1>{save_every}", src_text, count=1, flags=re.MULTILINE)
     out_text = re.sub(r"^(\s*valid_every:\s*)\d+", rf"\g<1>{valid_every}", out_text, count=1, flags=re.MULTILINE)
 
