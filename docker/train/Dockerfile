@@ -26,7 +26,6 @@ RUN \
     python3.12 \
     python3.12-venv \
     python3.12-dev \
-    python3-pip \
     ffmpeg \
     git \
     ca-certificates \
