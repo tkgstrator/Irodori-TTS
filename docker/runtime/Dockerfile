@@ -35,12 +35,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN \
   --mount=type=cache,target=/var/lib/apt,sharing=locked \
   --mount=type=cache,target=/var/cache/apt,sharing=locked \
-  rm -f /etc/apt/apt.conf.d/docker-clean && \
   apt-get update && \
   apt-get install -y --no-install-recommends \
-    python3.12 python3.12-venv python3-pip \
+    python3.12 \
+    python3.12-venv \
     ffmpeg \
-    ca-certificates curl git && \
+    ca-certificates \
+    curl \
+    git && \
   ln -sf /usr/bin/python3.12 /usr/local/bin/python3 && \
   ln -sf /usr/bin/python3.12 /usr/local/bin/python
 
