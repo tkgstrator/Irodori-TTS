@@ -2,7 +2,7 @@
 """Download per-speaker tar.gz archives from a HF dataset repo and extract.
 
 Remote layout (as uploaded by scripts/dataset/hf_upload_archives.py):
-    archives/<speaker>.tar.gz
+    speakers/<speaker>.tar.gz
 
 Local layout after extraction:
     data/<speaker>/manifest.jsonl
@@ -15,8 +15,8 @@ thousands of individual .pt files.
 
 Usage:
     uv run python scripts/dataset/hf_download_dataset.py \\
-        --repo-id ultemica/irodori-tts-voices \\
-        [--speakers margo,leia]
+        --repo-id <org>/irodori-tts-voices \\
+        [--speakers <speaker1>,<speaker2>]
 """
 from __future__ import annotations
 
@@ -75,10 +75,10 @@ def main() -> None:
     remote_archives = {
         Path(f).stem.removesuffix(".tar"): f
         for f in remote_files
-        if f.startswith("archives/") and f.endswith(".tar.gz")
+        if f.startswith("speakers/") and f.endswith(".tar.gz")
     }
     if not remote_archives:
-        raise SystemExit(f"{args.repo_id}: no archives/*.tar.gz found")
+        raise SystemExit(f"{args.repo_id}: no speakers/*.tar.gz found")
 
     if args.speakers:
         requested = [s.strip() for s in args.speakers.split(",") if s.strip()]
