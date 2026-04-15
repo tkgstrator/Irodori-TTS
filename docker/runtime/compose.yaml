@@ -7,7 +7,6 @@ services:
     volumes:
       - ./configs/runtime.yaml:/app/config.yaml:ro
       - ./models:/app/models:ro
-      - ./data/LoRA:/app/data/LoRA:ro
       - hf_cache:/root/.cache/huggingface
       - tts_venv:/app/.venv
     environment:
