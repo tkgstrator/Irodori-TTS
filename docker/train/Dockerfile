@@ -23,9 +23,17 @@ RUN \
   --mount=type=cache,target=/var/cache/apt,sharing=locked \
   apt-get update && \
   apt-get install -y --no-install-recommends \
-    python3.12 python3.12-venv python3.12-dev python3-pip \
-    ffmpeg git ca-certificates curl \
-    build-essential cmake pkg-config && \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    python3-pip \
+    ffmpeg \
+    git \
+    ca-certificates \
+    curl \
+    build-essential \
+    cmake \
+    pkg-config && \
   ln -sf /usr/bin/python3.12 /usr/local/bin/python3 && \
   ln -sf /usr/bin/python3.12 /usr/local/bin/python
 
