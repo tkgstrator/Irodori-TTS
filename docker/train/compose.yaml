@@ -1,5 +1,8 @@
 services:
   train:
+    build:
+      context: ../..
+      dockerfile: docker/train/Dockerfile
     image: tkgling/irodori-tts-train:latest
     container_name: irodori-tts-train
     env_file:
@@ -9,18 +12,18 @@ services:
       #   WANDB_BASE_URL            (e.g. https://wandb.tkgstrator.work)
       #   CF_ACCESS_CLIENT_ID       (Cloudflare Access service token)
       #   CF_ACCESS_CLIENT_SECRET
-      - .env
+      - ../../.env
     environment:
       HF_HOME: /root/.cache/huggingface
       # Override these at `docker compose run` time:
-      #   HF_DATASET: ultemica/irodori-tts-voices
-      #   SPEAKERS: margo,leia
+      #   HF_DATASET: <org>/irodori-tts-voices
+      #   SPEAKERS: <speaker1>,<speaker2>
       #   NUM_GPUS: 8
       #   NO_RESUME: "true"
     volumes:
-      - ./data:/app/data
-      - ./outputs:/app/outputs
-      - ./models:/app/models
+      - ../../data:/app/data
+      - ../../outputs:/app/outputs
+      - ../../models:/app/models
       - hf_cache:/root/.cache/huggingface
       - train_venv:/app/.venv
     deploy:

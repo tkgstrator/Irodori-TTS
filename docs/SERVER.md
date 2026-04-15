@@ -107,52 +107,21 @@ uv run python tts_server.py \
 
 ### ビルド
 
-```bash
-docker build -f docker/runtime/Dockerfile -t <org>/irodori-tts .
-```
-
-### compose 例 (`docker/runtime/compose.yaml` 同梱)
-
-```yaml
-services:
-  tts:
-    image: <org>/irodori-tts:latest
-    container_name: irodori-tts
-    ports:
-      - 8765:8765
-    volumes:
-      - ./configs/runtime.yaml:/app/config.yaml:ro
-      - ./models:/app/models:ro
-      - hf_cache:/root/.cache/huggingface
-      - tts_venv:/app/.venv
-    environment:
-      TTS_HOST: 0.0.0.0
-      TTS_PORT: 8765
-      HF_HOME: /root/.cache/huggingface
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
-
-volumes:
-  hf_cache:
-  tts_venv:
-```
-
-起動:
+リポジトリに `docker/runtime/compose.yaml` が同梱されており、`build:` と `image:` の両方を持っているので `docker compose` だけでビルド〜起動まで通ります。
 
 ```bash
-docker compose -f docker/runtime/compose.yaml up -d
-docker compose -f docker/runtime/compose.yaml logs -f
+docker compose -f docker/runtime/compose.yaml build      # ビルド
+docker compose -f docker/runtime/compose.yaml up -d      # 起動
+docker compose -f docker/runtime/compose.yaml logs -f    # ログ追跡
 ```
+
+`.dockerignore` は `docker/runtime/Dockerfile.dockerignore` (BuildKit の `<Dockerfile>.dockerignore` 規約) に置いています。
+
+ボリュームの要点:
 
 - **`tts_venv`**: 初回に `uv sync --frozen --no-dev` で構築。2 回目以降は数秒で起動。
 - **`hf_cache`**: DACVAE codec / tokenizer などの HF hub キャッシュを永続化。
-- **`./models`**: ベースモデル (`model.safetensors`) と LoRA 話者 `.safetensors` を置く場所。未マウント / ベースモデル未配置なら `base_hf_repo` から取りに行きます。LoRA は `./models/LoRA/` 配下に置いてください。新しい LoRA を追加したら**コンテナの再起動が必要**（起動時にだけスキャンするため）。
+- **`../../models`**: ベースモデル (`model.safetensors`) と LoRA 話者 `.safetensors` を置く場所。未マウント / ベースモデル未配置なら `base_hf_repo` から取りに行きます。LoRA は `models/LoRA/` 配下に置いてください。新しい LoRA を追加したら**コンテナの再起動が必要**（起動時にだけスキャンするため）。
 
 ---
 
