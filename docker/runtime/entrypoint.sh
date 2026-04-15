@@ -2,7 +2,7 @@
 # Irodori-TTS runtime container entrypoint.
 #
 # Environment variables:
-#   TTS_CONFIG  - path to tts_server config YAML (bind-mounted).
+#   TTS_CONFIG  - path to server config YAML (bind-mounted).
 #                 Default: /app/config.yaml
 #   TTS_HOST    - listen host. Default: 0.0.0.0
 #   TTS_PORT    - listen port. Default: 8765
@@ -25,8 +25,8 @@ if [ ! -f "${TTS_CONFIG}" ]; then
   exit 1
 fi
 
-log "starting tts_server config=${TTS_CONFIG} host=${TTS_HOST} port=${TTS_PORT}"
-exec uv run --no-sync python tts_server.py \
+log "starting server config=${TTS_CONFIG} host=${TTS_HOST} port=${TTS_PORT}"
+exec uv run --no-sync python server.py \
   --config "${TTS_CONFIG}" \
   --host "${TTS_HOST}" \
   --port "${TTS_PORT}"

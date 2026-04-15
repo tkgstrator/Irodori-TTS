@@ -4,10 +4,10 @@
 #
 # This image is intentionally slim. At runtime the entrypoint only runs
 # `uv sync --frozen --no-dev` into /app/.venv (mount as a named volume so the
-# venv persists across restarts) and then launches tts_server.
+# venv persists across restarts) and then launches server.py.
 #
 # Everything else is supplied by the user via bind mounts:
-#   - /app/config.yaml              (tts_server config YAML)
+#   - /app/config.yaml              (server config YAML)
 #   - /app/models/...               (base checkpoint referenced from config)
 #   - /app/outputs/...              (LoRA adapter directories referenced from config)
 #
@@ -52,8 +52,7 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock README.md ./
 COPY irodori_tts ./irodori_tts
-COPY tts_server.py infer.py train.py \
-     convert_checkpoint_to_safetensors.py prepare_manifest.py ./
+COPY server.py infer.py ./
 COPY docker/runtime/entrypoint.sh ./entrypoint.sh
 RUN chmod +x entrypoint.sh
 

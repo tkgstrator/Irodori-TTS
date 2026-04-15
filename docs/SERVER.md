@@ -1,6 +1,6 @@
 # Irodori-TTS 推論サーバガイド
 
-学習済みの LoRA 話者アダプタを FastAPI で配信する `tts_server.py` の使い方です。1 つのベースモデル + 複数 LoRA を 1 プロセスに載せ、リクエストごとに active adapter を切り替えて合成します。
+学習済みの LoRA 話者アダプタを FastAPI で配信する `server.py` の使い方です。1 つのベースモデル + 複数 LoRA を 1 プロセスに載せ、リクエストごとに active adapter を切り替えて合成します。
 
 ---
 
@@ -83,7 +83,7 @@ uv run python scripts/lora/export_lora_to_safetensors.py \
 ## 4. ローカルでの起動
 
 ```bash
-uv run python tts_server.py \
+uv run python server.py \
   --config configs/runtime.yaml \
   --host 127.0.0.1 \
   --port 8765
@@ -187,10 +187,6 @@ docker compose -f docker/runtime/compose.yaml logs -f    # ログ追跡
 - `X-TTS-Sample-Rate`
 
 が付きます。固定で 30 秒長の波形が返るので、無音末尾が気になる場合はクライアント側で trim してください。
-
-### `GET /demo`
-
-ブラウザから叩ける簡易 UI。話者プルダウン + テキスト入力 + 任意パラメータで即試聴できます。`http://localhost:8765/demo` を開くだけ。
 
 ---
 

@@ -1,4 +1,5 @@
 """FastAPI TTS server for Irodori-TTS speaker LoRAs."""
+
 from __future__ import annotations
 
 import argparse
@@ -7,8 +8,8 @@ import json
 import logging
 import os
 import threading
-import uuid as uuid_lib
 import urllib.parse
+import uuid as uuid_lib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ import soundfile as sf
 import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from irodori_tts.inference_runtime import (
@@ -27,7 +28,6 @@ from irodori_tts.inference_runtime import (
     resolve_cfg_scales,
 )
 from irodori_tts.lora import (
-    is_lora_adapter_dir,
     is_lora_safetensors_file,
     read_lora_safetensors_metadata,
 )
@@ -38,87 +38,7 @@ FIXED_SECONDS = 30.0
 # drop .safetensors files into models/LoRA/ without assigning ids manually.
 _LORA_UUID_NAMESPACE = uuid_lib.UUID("8e6d8a0e-5a52-4a1e-8c8d-4c3e2f6a1b9f")
 
-logger = logging.getLogger("tts_server")
-
-
-_DEMO_HTML = """<!doctype html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<title>Irodori-TTS Demo</title>
-<style>
- body{font-family:system-ui,sans-serif;max-width:680px;margin:2rem auto;padding:0 1rem;}
- label{display:block;margin-top:1rem;font-weight:600;}
- select,textarea,input{width:100%;box-sizing:border-box;font-size:1rem;padding:.5rem;}
- textarea{min-height:6rem;}
- .row{display:flex;gap:.5rem;}
- .row>div{flex:1;}
- button{margin-top:1rem;padding:.6rem 1.2rem;font-size:1rem;cursor:pointer;}
- #status{margin-top:1rem;color:#555;}
- audio{width:100%;margin-top:1rem;}
-</style>
-</head>
-<body>
-<h1>Irodori-TTS Demo</h1>
-<label>話者<select id="speaker"></select></label>
-<label>テキスト<textarea id="text">こんにちは、今日はいい天気ですね。</textarea></label>
-<div class="row">
-  <div><label>seed<input id="seed" type="number" placeholder="empty = random"></label></div>
-  <div><label>num_steps<input id="num_steps" type="number" placeholder="default"></label></div>
-</div>
-<div class="row">
-  <div><label>cfg_scale_text<input id="cfg_scale_text" type="number" step="0.1" placeholder="default"></label></div>
-  <div><label>cfg_scale_speaker<input id="cfg_scale_speaker" type="number" step="0.1" placeholder="default"></label></div>
-</div>
-<button id="run">合成</button>
-<div id="status"></div>
-<audio id="player" controls></audio>
-<script>
-async function loadSpeakers(){
-  const r = await fetch('/speakers');
-  const j = await r.json();
-  const sel = document.getElementById('speaker');
-  for(const s of j.speakers){
-    const o=document.createElement('option');
-    o.value=s.uuid; o.textContent=`${s.name} (${s.uuid.slice(0,8)})`;
-    sel.appendChild(o);
-  }
-}
-function numOrNull(id){
-  const v=document.getElementById(id).value.trim();
-  return v===''?null:Number(v);
-}
-async function synth(){
-  const status=document.getElementById('status');
-  status.textContent='生成中...';
-  const body={
-    speaker_id: document.getElementById('speaker').value,
-    text: document.getElementById('text').value,
-  };
-  for(const k of ['seed','num_steps','cfg_scale_text','cfg_scale_speaker']){
-    const v=numOrNull(k);
-    if(v!==null) body[k]=v;
-  }
-  const t0=performance.now();
-  const r=await fetch('/synth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(!r.ok){
-    const t=await r.text();
-    status.textContent=`error ${r.status}: ${t}`;
-    return;
-  }
-  const blob=await r.blob();
-  const url=URL.createObjectURL(blob);
-  const player=document.getElementById('player');
-  player.src=url; player.play();
-  const seed=r.headers.get('x-tts-used-seed');
-  status.textContent=`done in ${((performance.now()-t0)/1000).toFixed(2)}s, seed=${seed}, ${(blob.size/1024).toFixed(1)} KB`;
-}
-document.getElementById('run').addEventListener('click',synth);
-loadSpeakers();
-</script>
-</body>
-</html>
-"""
+logger = logging.getLogger("irodori_tts.server")
 
 
 @dataclass
@@ -164,9 +84,7 @@ def _discover_lora_dir(lora_dir: Path) -> list[SpeakerSpec]:
             logger.warning("failed to read metadata from %s: %s", entry, exc)
             continue
         name = meta.get("name") or entry.stem
-        speaker_uuid = meta.get("uuid") or str(
-            uuid_lib.uuid5(_LORA_UUID_NAMESPACE, entry.stem)
-        )
+        speaker_uuid = meta.get("uuid") or str(uuid_lib.uuid5(_LORA_UUID_NAMESPACE, entry.stem))
         defaults: dict[str, Any] = {}
         raw_defaults = meta.get("defaults")
         if raw_defaults:
@@ -304,9 +222,7 @@ class SynthRequest(BaseModel):
         examples=["7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb"],
     )
     text: str = Field(..., min_length=1, examples=["こんにちは、今日はいい天気ですね。"])
-    seed: int | None = Field(
-        default=None, description="Sampling seed. Omit or set <0 for random."
-    )
+    seed: int | None = Field(default=None, description="Sampling seed. Omit or set <0 for random.")
     num_steps: int | None = Field(
         default=None, description="RF sampling steps. Omit or set <=0 to use speaker default."
     )
@@ -317,14 +233,21 @@ class SynthRequest(BaseModel):
         default=None, description="Speaker CFG scale. Omit or set <=0 to use speaker default."
     )
     speaker_kv_scale: float | None = Field(
-        default=None, description="Speaker KV scale (>1 strengthens identity). Omit or set <=0 to disable."
+        default=None,
+        description="Speaker KV scale (>1 strengthens identity). Omit or set <=0 to disable.",
     )
     truncation_factor: float | None = Field(
         default=None, description="Noise truncation (e.g. 0.8). Omit or set <=0 to disable."
     )
 
 
-_POSITIVE_ONLY = {"num_steps", "cfg_scale_text", "cfg_scale_speaker", "speaker_kv_scale", "truncation_factor"}
+_POSITIVE_ONLY = {
+    "num_steps",
+    "cfg_scale_text",
+    "cfg_scale_speaker",
+    "speaker_kv_scale",
+    "truncation_factor",
+}
 
 
 def _merge_defaults(req: SynthRequest, defaults: dict[str, Any]) -> dict[str, Any]:
@@ -358,10 +281,6 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
     if eager_load:
         registry.load()
 
-    @app.get("/demo", response_class=HTMLResponse, include_in_schema=False)
-    def demo() -> HTMLResponse:
-        return HTMLResponse(_DEMO_HTML)
-
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {"status": "ok", "speakers": len(cfg.speakers)}
@@ -388,12 +307,13 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
     def synth(req: SynthRequest) -> Response:
         try:
             runtime, spec = registry.acquire(req.speaker_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail=f"unknown speaker_id: {req.speaker_id}")
+        except KeyError as err:
+            raise HTTPException(
+                status_code=404, detail=f"unknown speaker_id: {req.speaker_id}"
+            ) from err
 
         params = _merge_defaults(req, spec.defaults)
 
-        use_caption = bool(runtime.model_cfg.use_caption_condition)
         use_speaker = bool(runtime.model_cfg.use_speaker_condition)
         cfg_text, cfg_caption, cfg_speaker, _messages = resolve_cfg_scales(
             cfg_guidance_mode="independent",
@@ -445,7 +365,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             result = runtime.synthesize(sampling_req, log_fn=None)
         except Exception as e:
             logger.exception("synthesis failed")
-            raise HTTPException(status_code=500, detail=f"synthesis failed: {e}")
+            raise HTTPException(status_code=500, detail=f"synthesis failed: {e}") from e
 
         audio = result.audio
         if audio.ndim == 2:
