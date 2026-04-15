@@ -8,8 +8,10 @@ import random
 import re
 import shutil
 import sys
+import uuid as _uuid
 from contextlib import nullcontext
 from dataclasses import asdict, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
@@ -91,6 +93,77 @@ def echo_style_masked_mse(
     return (diff * loss_weight).mean() / denom
 
 
+def _resolve_speaker_name(manifest_path: str | Path | None) -> str | None:
+    if manifest_path is None:
+        return None
+    p = Path(manifest_path)
+    speaker_dir = p.parent
+    cfg_path = speaker_dir / "config.yaml"
+    speaker_id = speaker_dir.name or None
+    if not cfg_path.is_file():
+        return speaker_id
+    try:
+        import yaml
+        with cfg_path.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        speaker = (data.get("speaker") or {}) if isinstance(data, dict) else {}
+        return speaker.get("name") or speaker.get("id") or speaker_id
+    except Exception:
+        return speaker_id
+
+
+def _build_lora_safetensors_metadata(
+    *,
+    run_uuid: str | None,
+    run_name: str | None,
+    speaker_name: str | None,
+    base_model: str | None,
+    step: int,
+    optim_steps_per_epoch: int | None,
+    train_cfg: TrainConfig,
+    val_loss: float | None,
+) -> dict[str, str]:
+    meta: dict[str, str] = {}
+    if run_uuid:
+        meta["uuid"] = str(run_uuid)
+    if run_name:
+        meta["model_name"] = str(run_name)
+    if speaker_name:
+        meta["speaker"] = str(speaker_name)
+    if base_model:
+        meta["base_model"] = str(base_model)
+    meta["step"] = str(int(step))
+    if optim_steps_per_epoch and optim_steps_per_epoch > 0:
+        meta["epoch"] = str(int(step) // int(optim_steps_per_epoch))
+    if val_loss is not None:
+        meta["val_loss"] = f"{float(val_loss):.6f}"
+    meta["created_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    meta["lora_r"] = str(int(train_cfg.lora_r))
+    meta["lora_alpha"] = str(int(train_cfg.lora_alpha))
+    meta["lora_dropout"] = f"{float(train_cfg.lora_dropout):.6f}"
+    meta["lora_target_modules"] = str(train_cfg.lora_target_modules)
+    return meta
+
+
+def _inject_safetensors_metadata(adapter_path: Path, extra_metadata: dict[str, str]) -> None:
+    """Re-save adapter_model.safetensors with merged __metadata__."""
+    try:
+        from safetensors import safe_open
+        from safetensors.torch import save_file
+    except ImportError:
+        return
+    if not adapter_path.is_file():
+        return
+    tensors: dict[str, torch.Tensor] = {}
+    existing_meta: dict[str, str] = {}
+    with safe_open(str(adapter_path), framework="pt", device="cpu") as f:
+        existing_meta = dict(f.metadata() or {})
+        for key in f.keys():
+            tensors[key] = f.get_tensor(key)
+    merged = {**existing_meta, **{k: v for k, v in extra_metadata.items() if v is not None}}
+    save_file(tensors, str(adapter_path), metadata=merged)
+
+
 def save_checkpoint(
     path: str | Path,
     model: torch.nn.Module,
@@ -104,6 +177,11 @@ def save_checkpoint(
     es_best_val: float | None = None,
     es_no_improve: int | None = None,
     manifest_size: int | None = None,
+    run_uuid: str | None = None,
+    run_name: str | None = None,
+    speaker_name: str | None = None,
+    optim_steps_per_epoch: int | None = None,
+    val_loss: float | None = None,
 ) -> None:
     path = Path(path)
     es_state = {
@@ -120,6 +198,22 @@ def save_checkpoint(
                 "LoRA checkpoint saving requires a PEFT model with save_pretrained()."
             )
         model.save_pretrained(path)
+        adapter_safetensors = path / "adapter_model.safetensors"
+        if adapter_safetensors.is_file():
+            base_model_str: str | None = None
+            if base_init is not None:
+                base_model_str = base_init.get("checkpoint_path")
+            extra_meta = _build_lora_safetensors_metadata(
+                run_uuid=run_uuid,
+                run_name=run_name,
+                speaker_name=speaker_name,
+                base_model=base_model_str,
+                step=step,
+                optim_steps_per_epoch=optim_steps_per_epoch,
+                train_cfg=train_cfg,
+                val_loss=val_loss,
+            )
+            _inject_safetensors_metadata(adapter_safetensors, extra_meta)
         dump_configs(path / "config.json", model_cfg, train_cfg)
         (path / LORA_METADATA_NAME).write_text(
             json.dumps({"base_init": base_init}, ensure_ascii=False, indent=2),
@@ -258,6 +352,10 @@ def maybe_save_best_val_loss_checkpoint(
     es_best_val: float | None = None,
     es_no_improve: int | None = None,
     manifest_size: int | None = None,
+    run_uuid: str | None = None,
+    run_name: str | None = None,
+    speaker_name: str | None = None,
+    optim_steps_per_epoch: int | None = None,
 ) -> tuple[list[tuple[float, int, Path]], Path | None]:
     if keep_best_n <= 0:
         return checkpoints, None
@@ -289,6 +387,11 @@ def maybe_save_best_val_loss_checkpoint(
         es_best_val=es_best_val,
         es_no_improve=es_no_improve,
         manifest_size=manifest_size,
+        run_uuid=run_uuid,
+        run_name=run_name,
+        speaker_name=speaker_name,
+        optim_steps_per_epoch=optim_steps_per_epoch,
+        val_loss=float(val_loss),
     )
     checkpoints.append((float(val_loss), int(step), path))
     checkpoints = prune_best_val_loss_checkpoints(checkpoints, keep_best_n)
@@ -1886,10 +1989,30 @@ def main() -> None:
     )
     if len(loader) == 0:
         raise ValueError("Dataloader yielded zero batches. Check manifest and batch_size settings.")
+    import math
+    optim_steps_per_epoch = max(
+        1,
+        math.ceil(len(loader) / max(1, train_cfg.gradient_accumulation_steps)),
+    )
+
+    speaker_name = _resolve_speaker_name(train_cfg.manifest_path)
+    run_name = (wandb_run.name if wandb_run is not None else None) or train_cfg.wandb_run_name or output_dir.name
+    run_uuid: str | None = None
+    if args.resume is not None:
+        try:
+            from safetensors import safe_open
+            existing_adapter = Path(args.resume) / "adapter_model.safetensors"
+            if existing_adapter.is_file():
+                with safe_open(str(existing_adapter), framework="pt", device="cpu") as _f:
+                    run_uuid = (_f.metadata() or {}).get("uuid")
+        except Exception:
+            run_uuid = None
+    if not run_uuid:
+        run_uuid = str(_uuid.uuid4())
+    if is_main_process:
+        print(f"[run identity] uuid={run_uuid} name={run_name} speaker={speaker_name}")
     if train_cfg.max_epochs is not None:
-        import math
         grad_accum = max(1, train_cfg.gradient_accumulation_steps)
-        optim_steps_per_epoch = max(1, math.ceil(len(loader) / grad_accum))
         derived_max_steps = train_cfg.max_epochs * optim_steps_per_epoch
         if rank == 0:
             print(
@@ -2413,6 +2536,10 @@ def main() -> None:
                         es_best_val=es_best_val,
                         es_no_improve=es_no_improve,
                         manifest_size=manifest_size,
+                        run_uuid=run_uuid,
+                        run_name=run_name,
+                        speaker_name=speaker_name,
+                        optim_steps_per_epoch=optim_steps_per_epoch,
                     )
                     enforce_periodic_checkpoint_limit(
                         output_dir=output_dir,
@@ -2501,6 +2628,10 @@ def main() -> None:
                             es_best_val=es_best_val,
                             es_no_improve=es_no_improve,
                             manifest_size=manifest_size,
+                            run_uuid=run_uuid,
+                            run_name=run_name,
+                            speaker_name=speaker_name,
+                            optim_steps_per_epoch=optim_steps_per_epoch,
                         )
                         if best_path is not None:
                             progress.write(
@@ -2566,6 +2697,10 @@ def main() -> None:
                     es_best_val=es_best_val,
                     es_no_improve=es_no_improve,
                     manifest_size=manifest_size,
+                    run_uuid=run_uuid,
+                    run_name=run_name,
+                    speaker_name=speaker_name,
+                    optim_steps_per_epoch=optim_steps_per_epoch,
                 )
                 if best_path is not None:
                     progress.write(
@@ -2596,6 +2731,10 @@ def main() -> None:
                 es_best_val=es_best_val,
                 es_no_improve=es_no_improve,
                 manifest_size=manifest_size,
+                run_uuid=run_uuid,
+                run_name=run_name,
+                speaker_name=speaker_name,
+                optim_steps_per_epoch=optim_steps_per_epoch,
             )
             if sample_cfg.enabled:
                 _maybe_emit_samples(step)
