@@ -2,7 +2,7 @@
 
 The resulting file carries all PEFT metadata (adapter_config, base_init,
 model_config, name/uuid/defaults) in the safetensors header so it can be
-served by tts_server without the surrounding checkpoint directory.
+served by server.py without the surrounding checkpoint directory.
 
 Example
 -------
@@ -15,6 +15,7 @@ Example
 If --uuid is omitted, a deterministic UUIDv5 is derived from the output
 filename so the server identifier stays stable across exports.
 """
+
 from __future__ import annotations
 
 import argparse
