@@ -13,7 +13,7 @@
 ├── margo/
 │   ├── manifest.jsonl   # 必須: 学習マニフェスト
 │   ├── config.yaml      # 話者メタデータ（前処理・config 生成が参照）
-│   └── latents/         # 必須: DACVAE 事前エンコード済み潜在
+│   └── latents/         # 必須: DACVAE で事前エンコードした latents
 │       ├── 00000000_00000000.pt
 │       └── ...
 ├── leia/
@@ -31,7 +31,7 @@
 |--------------|--------|-------------------------------------------------------------|
 | `text`       | str    | 書き起こしテキスト                                          |
 | `latent_path`| str    | 話者ディレクトリからの相対パス。例: `latents/00000000_00000000.pt` |
-| `num_frames` | int    | 潜在のフレーム数(時間方向長さ)                            |
+| `num_frames` | int    | latents のフレーム数(時間方向長さ)                        |
 
 例:
 ```json
@@ -42,9 +42,9 @@
 
 - DACVAE (`Aratako/Semantic-DACVAE-Japanese-32dim`) のエンコーダ出力を `torch.save` したもの。
 - shape は `(latent_dim=32, num_frames)` で、1 サンプル = 1 ファイル。
-- 生 wav はアップロード不要(学習ループは潜在だけ読みます)。
+- 生 wav はアップロード不要(学習ループは latents だけ読みます)。
 
-> **作り方**: `prepare_manifest.py` が HuggingFace dataset を入力に取り、DACVAE 潜在 (`latents/*.pt`) と `manifest.jsonl` を一度に生成します。実体は HF `datasets` 経由で audio/text カラムを読むので、ソースは HF repo でも `--data-files` を使ったローカル JSONL でも構いません。
+> **作り方**: `prepare_manifest.py` が HuggingFace dataset を入力に取り、DACVAE の latents (`latents/*.pt`) と `manifest.jsonl` を一度に生成します。実体は HF `datasets` 経由で audio/text カラムを読むので、ソースは HF repo でも `--data-files` を使ったローカル JSONL でも構いません。
 
 ```bash
 uv run --no-sync python prepare_manifest.py \
@@ -200,7 +200,7 @@ docker compose run --rm train
 
 - **`venv` volume**: 初回起動時に `entrypoint.sh` が `uv sync --frozen --no-dev` を走らせて `/app/.venv` を構築します。named volume に載せておけば 2 回目以降は `uv sync` が数秒で終わり、即 training に入れます。イメージ自体は venv を焼き込まない軽量構成なので pull/push も速いです。
 - **`hf_cache` volume**: tokenizer / Semantic-DACVAE codec など HF hub の取得物がキャッシュされるので、コンテナを作り直しても再ダウンロードが走りません。
-- `./data` をマウントしておくと、次回以降は同じ潜在を再ダウンロードせずに済みます。
+- `./data` をマウントしておくと、次回以降は同じ latents を再ダウンロードせずに済みます。
 - `./outputs` には話者ごとに `outputs/<speaker>_lora/{checkpoint_best_val_loss_*, train.log, samples/}` が出ます。
 - `./models` にベースチェックポイントが落ちてくるので、マウントしておけば全話者・全コンテナ再実行で使い回せます。
 - `HF_DATASET` を外せばダウンロードをスキップし、既にマウント済みの `data/<speaker>/` をそのまま学習します。`SPEAKERS` も空なら `data/` 配下の全話者が対象です。
