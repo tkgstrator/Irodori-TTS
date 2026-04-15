@@ -341,7 +341,7 @@ outputs/<speaker>_lora/
     └── ...
 ```
 
-`samples/` を聴いて checkpoint を決定 → `scripts/lora/export_lora_to_safetensors.py` で単一 `.safetensors` に書き出し → `data/LoRA/` に置いて推論サーバを再起動、という流れになります。サーバ側の詳細は `docs/SERVER.md` を参照。
+`samples/` を聴いて checkpoint を決定 → `scripts/lora/export_lora_to_safetensors.py` で単一 `.safetensors` に書き出し → `models/LoRA/` に置いて推論サーバを再起動、という流れになります。サーバ側の詳細は `docs/SERVER.md` を参照。
 
 ### `adapter_model.safetensors` に埋め込まれる metadata
 

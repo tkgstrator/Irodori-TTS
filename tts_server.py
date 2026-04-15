@@ -35,7 +35,7 @@ from irodori_tts.lora import (
 FIXED_SECONDS = 30.0
 
 # Namespace for deterministic UUIDv5 derivation from LoRA filenames. Lets users
-# drop .safetensors files into data/LoRA/ without assigning ids manually.
+# drop .safetensors files into models/LoRA/ without assigning ids manually.
 _LORA_UUID_NAMESPACE = uuid_lib.UUID("8e6d8a0e-5a52-4a1e-8c8d-4c3e2f6a1b9f")
 
 logger = logging.getLogger("tts_server")

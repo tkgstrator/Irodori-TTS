@@ -7,7 +7,7 @@
 ## 1. 全体像
 
 - **ベースモデル**: `configs/runtime.yaml` の `base_checkpoint`（ローカルに無ければ `base_hf_repo` から HF に取りに行きます）を 1 回だけ読み込み。
-- **話者アダプタ**: `lora_dir`（既定 `data/LoRA/`）配下の `.safetensors` を起動時にスキャンし、それぞれに埋め込まれた metadata (`name` / `uuid` / `defaults` / `adapter_config`) から話者を自動登録します。YAML 側に話者ブロックを書く必要はありません。
+- **話者アダプタ**: `lora_dir`（既定 `models/LoRA/`）配下の `.safetensors` を起動時にスキャンし、それぞれに埋め込まれた metadata (`name` / `uuid` / `defaults` / `adapter_config`) から話者を自動登録します。YAML 側に話者ブロックを書く必要はありません。
 - **推論**: `/synth` にテキストと `speaker_id` (= 話者 UUID) を POST すると、WAV が返ります。`no_ref=true` 固定 (voice-cloning ではなく LoRA で話者情報を持つ運用) です。
 
 ---
@@ -28,7 +28,7 @@ codec_deterministic_encode: true
 codec_deterministic_decode: true
 enable_watermark: false
 
-lora_dir: data/LoRA
+lora_dir: models/LoRA
 ```
 
 主要フィールド:
@@ -56,7 +56,7 @@ lora_dir: data/LoRA
 ```bash
 uv run python scripts/lora/export_lora_to_safetensors.py \
   --input  outputs/<speaker>_lora/checkpoint_best_val_loss_0002400_0.312100 \
-  --output data/LoRA/<speaker>.safetensors \
+  --output models/LoRA/<speaker>.safetensors \
   --name   "<表示名>" \
   --defaults '{"num_steps": 40, "cfg_scale_text": 3.0, "cfg_scale_speaker": 5.0}'
 ```
@@ -76,7 +76,7 @@ uv run python scripts/lora/export_lora_to_safetensors.py \
 
 さらに学習時に `train.py` が埋め込むフラットキー (`uuid` / `model_name` / `speaker` / `base_model` / `step` / `epoch` / `val_loss` / `created_at` / `lora_r` / `lora_alpha` / `lora_dropout` / `lora_target_modules`) もそのまま持ち回されます。export 側の `uuid` は別 namespace で再生成されるので、学習時 UUID とサーバ UUID は別物です（識別文字列が欲しければ `safetensors.safe_open(...).metadata()` で両方取れます）。
 
-エクスポート後は `data/LoRA/` にファイルを置けば起動時に自動的に拾われます。
+エクスポート後は `models/LoRA/` にファイルを置けば起動時に自動的に拾われます。
 
 ---
 
@@ -123,7 +123,6 @@ services:
     volumes:
       - ./configs/runtime.yaml:/app/config.yaml:ro
       - ./models:/app/models:ro
-      - ./data/LoRA:/app/data/LoRA:ro
       - hf_cache:/root/.cache/huggingface
       - tts_venv:/app/.venv
     environment:
@@ -153,8 +152,7 @@ docker compose -f docker/runtime/compose.yaml logs -f
 
 - **`tts_venv`**: 初回に `uv sync --frozen --no-dev` で構築。2 回目以降は数秒で起動。
 - **`hf_cache`**: DACVAE codec / tokenizer などの HF hub キャッシュを永続化。
-- **`./models`**: ベースモデル (`model.safetensors`) を置く場所。未マウント / 未配置なら `base_hf_repo` から取りに行きます。
-- **`./data/LoRA`**: 話者 `.safetensors` を置く場所。ここに新しいファイルを追加したら**コンテナの再起動が必要**（起動時にだけスキャンするため）。
+- **`./models`**: ベースモデル (`model.safetensors`) と LoRA 話者 `.safetensors` を置く場所。未マウント / ベースモデル未配置なら `base_hf_repo` から取りに行きます。LoRA は `./models/LoRA/` 配下に置いてください。新しい LoRA を追加したら**コンテナの再起動が必要**（起動時にだけスキャンするため）。
 
 ---
 
@@ -232,7 +230,7 @@ docker compose -f docker/runtime/compose.yaml logs -f
 1. LoRA を学習して `outputs/<speaker>_lora/checkpoint_best_val_loss_*` を得る（`docs/TRAINING.md` 参照）。
 2. `samples/` の per-step wav を聴いて採用する checkpoint を決める。
 3. `scripts/lora/export_lora_to_safetensors.py` で `.safetensors` にエクスポートし、`--name` / `--defaults` を埋め込む。
-4. `.safetensors` を `data/LoRA/` に置く。
+4. `.safetensors` を `models/LoRA/` に置く。
 5. サーバを再起動（`docker compose restart tts` など）。
 6. `GET /speakers` で新 UUID を確認、`POST /synth` で動作確認。
 
@@ -242,7 +240,7 @@ docker compose -f docker/runtime/compose.yaml logs -f
 
 | 症状                                                 | 対処 |
 |------------------------------------------------------|------|
-| 起動時 `lora_dir does not exist`                     | `lora_dir` の解決先を確認。Docker なら `./data/LoRA` が正しくマウントされているか |
+| 起動時 `lora_dir does not exist`                     | `lora_dir` の解決先を確認。Docker なら `./models/LoRA` が正しくマウントされているか |
 | `skipping non-LoRA safetensors file`                 | `format=irodori-tts-lora/v1` が入っていない。`export_lora_to_safetensors.py` 経由で書き出す |
 | 話者一覧に出ているのに `/synth` が 404 を返す         | UUID をコピペミスしていないか確認（`/speakers` の値をそのまま使う） |
 | GPU を認識しない                                     | `--gpus all` / compose の `deploy.resources.reservations.devices` を確認 |

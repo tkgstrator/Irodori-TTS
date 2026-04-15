@@ -7,10 +7,9 @@ served by tts_server without the surrounding checkpoint directory.
 Example
 -------
   uv run python scripts/lora/export_lora_to_safetensors.py \
-      --input outputs/cherry_lora/checkpoint_0002000 \
-      --output data/LoRA/cherry.safetensors \
-      --name "花京院ちえり" \
-      --uuid 7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb \
+      --input outputs/<speaker>_lora/checkpoint_xxxxxxx \
+      --output models/LoRA/<speaker>.safetensors \
+      --name "<display name>" \
       --defaults '{"num_steps": 40, "cfg_scale_text": 3.0, "cfg_scale_speaker": 5.0}'
 
 If --uuid is omitted, a deterministic UUIDv5 is derived from the output
