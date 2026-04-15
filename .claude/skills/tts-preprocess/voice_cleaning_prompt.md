@@ -10,7 +10,7 @@ You are cleaning a Japanese transcript batch (JSONL of `{file_name, text}` recor
 
 1. A batch file (JSONL)
 2. An output diff file name
-3. A **speaker config** (`data/<speaker>/config.yaml`) with the speaker's canonical first-person (`cleaning.first_person`) and addressing convention (`cleaning.addressing`)
+3. A **speaker config** (`data/<speaker>/config.yaml`). The relevant block is `cleaning:`, which may contain `first_person`, `addressing`, and `characters`. The entire `cleaning:` block may also be **absent** — see "When the cleaning block is absent" below.
 
 Emit only the records that need changes, one per line, as `{file_name, original, cleaned, reason}`. Skip unchanged records. When done, report exactly `batch_NNN: N changed out of M`.
 
@@ -33,10 +33,28 @@ Do NOT touch filler words (`あっ`, `えっと`), sentence structure, ending-pa
 
 ## Applying the speaker config
 
-The caller provides the speaker's `data/<speaker>/config.yaml`. You only need two fields:
+The caller provides the speaker's `data/<speaker>/config.yaml`. The fields under `cleaning:` you may see:
 
 - `cleaning.first_person` — canonical first-person pronoun for this speaker
 - `cleaning.addressing` — one of `chan` / `san` / `kun` / `yobisute`
+- `cleaning.characters` — list of character entries, each `{name, aliases}`. `name` is the canonical spelling; `aliases` lists acoustically-close mishearings or alternate spellings that should be normalized **toward** `name`.
+
+### When the cleaning block is absent
+
+Some datasets (e.g. voice-actor-based training where one dataset spans multiple characters) omit `cleaning:` entirely. In that case there is no per-speaker canonical first-person, no addressing convention, and no character gazetteer. Run the cleanup purely on in-batch context:
+
+- Do not normalize first-person pronouns at all — there is no canonical to normalize toward.
+- Treat addressing suffixes as neutral evidence only (still useful for identifying that a token is a personal name, but without speaker-specific bias).
+- Still do contextual error correction and punctuation fixes as usual.
+
+### Character-name handling
+
+When `cleaning.characters` is present, treat it as a small gazetteer for name normalization. For each entry:
+
+- If a record contains an `aliases` token in a context where it is clearly referring to the same character as `name`, rewrite it to `name`. The aliases are curated as acoustically-close Whisper mishearings, so the usual acoustic-distance caveat is already satisfied by the config author.
+- Do **not** rewrite tokens that happen to match an alias but grammatically mean something else (apply the same grammatical role test as for first-person collisions).
+- If `aliases` is empty, the character is just listed for reference — no automatic rewrite, but you can use the `name` as scene context.
+- Multiple entries means the dataset covers multiple characters. Do not conflate them; each alias maps only to its own entry's `name`.
 
 ### First-person handling (acoustic-distance principle)
 

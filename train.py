@@ -107,7 +107,7 @@ def _resolve_speaker_name(manifest_path: str | Path | None) -> str | None:
         with cfg_path.open(encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         speaker = (data.get("speaker") or {}) if isinstance(data, dict) else {}
-        return speaker.get("name") or speaker.get("id") or speaker_id
+        return speaker.get("label") or speaker.get("name") or speaker.get("id") or speaker_id
     except Exception:
         return speaker_id
 
