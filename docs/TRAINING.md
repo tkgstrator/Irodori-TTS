@@ -162,61 +162,36 @@ docker compose build train
 | `CF_ACCESS_CLIENT_ID`     | 任意 | `WANDB_BASE_URL` が Cloudflare Access の背後にある場合の service token。`train.py` が `CF-Access-*` header として付与 |
 | `CF_ACCESS_CLIENT_SECRET` | 任意 | 同上(secret 側)                                                                                   |
 
-### 3.2 `compose.yaml` の例
+### 3.2 `docker/train/compose.yaml`
 
-学習サーバ側に `compose.yaml` を 1 個置いて、`.env` に `HF_TOKEN` / `WANDB_API_KEY` を入れるだけで回せる構成です。イメージは GHCR から pull する想定(自前ビルドする場合は `build:` セクションに差し替え)。
-
-```yaml
-services:
-  train:
-    image: <org>/irodori-tts-train:latest
-    # 自前ビルドするなら image: の代わりに:
-    # build:
-    #   context: .
-    #   dockerfile: docker/train/Dockerfile
-    env_file:
-      - .env
-    environment:
-      # ---- 必須: 全話者入りの HF dataset repo ----
-      HF_DATASET: <org>/irodori-tts-voices
-      # ---- 任意: 学習対象のサブセット指定(指定された話者だけを pull & 学習)----
-      # SPEAKERS: <speaker1>,<speaker2>
-      # ---- 任意: GPU 数 ----
-      NUM_GPUS: 8
-      # ---- 任意: 明示的な GPU index ----
-      # GPUS: "0 2 4 6"
-      HF_HOME: /root/.cache/huggingface
-    volumes:
-      # 永続化用の named volume
-      - venv:/app/.venv                         # uv sync 結果を持ち回す
-      - hf_cache:/root/.cache/huggingface       # tokenizer / codec などの HF キャッシュ
-      # ホスト側ディレクトリをマウント
-      - ./data:/app/data
-      - ./outputs:/app/outputs
-      - ./models:/app/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-volumes:
-  venv:
-  hf_cache:
-```
+学習用の compose ファイルはリポジトリに同梱されています (`docker/train/compose.yaml`)。`.env` をリポジトリルートに置いて `HF_TOKEN` / `WANDB_API_KEY` を入れるだけで回せます。`build:` と `image:` の両方を持っているので `docker compose` がイメージを自動ビルドします(既にビルド済みなら pull)。
 
 `.env`:
 ```
 HF_TOKEN=hf_xxx
 WANDB_API_KEY=xxxxxxxx
+# (任意) self-hosted W&B を使う場合
+# WANDB_BASE_URL=<your-wandb-host>
+# CF_ACCESS_CLIENT_ID=...
+# CF_ACCESS_CLIENT_SECRET=...
 ```
 
 起動:
 ```bash
-docker compose run --rm train
+docker compose -f docker/train/compose.yaml build
+HF_DATASET=<org>/irodori-tts-voices NUM_GPUS=8 \
+  docker compose -f docker/train/compose.yaml run --rm train
 ```
+
+環境変数でオーバーライドできる主なもの:
+
+- `HF_DATASET` — 必須。全話者入りの HF dataset repo。
+- `SPEAKERS` — カンマ区切りで学習対象サブセット指定 (例: `<speaker1>,<speaker2>`)。未指定なら `data/` 配下の全話者が対象。
+- `NUM_GPUS` — 使用 GPU 数。index `0..N-1` が使われる。
+- `GPUS` — 明示的な GPU index 指定 (例: `"0 2 4 6"`)。
+- `NO_RESUME` — `true` で resume を無効化。
+
+`.dockerignore` は `docker/train/Dockerfile.dockerignore` (BuildKit の `<Dockerfile>.dockerignore` 規約) に置いています。
 
 - **`venv` volume**: 初回起動時に `entrypoint.sh` が `uv sync --frozen --no-dev` を走らせて `/app/.venv` を構築します。named volume に載せておけば 2 回目以降は `uv sync` が数秒で終わり、即 training に入れます。イメージ自体は venv を焼き込まない軽量構成なので pull/push も速いです。
 - **`hf_cache` volume**: tokenizer / Semantic-DACVAE codec など HF hub の取得物がキャッシュされるので、コンテナを作り直しても再ダウンロードが走りません。

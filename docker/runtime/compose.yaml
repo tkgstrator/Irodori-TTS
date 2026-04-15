@@ -1,12 +1,15 @@
 services:
   tts:
+    build:
+      context: ../..
+      dockerfile: docker/runtime/Dockerfile
     image: tkgling/irodori-tts:latest
     container_name: irodori-tts
     ports:
       - 8765:8765
     volumes:
-      - ./configs/runtime.yaml:/app/config.yaml:ro
-      - ./models:/app/models:ro
+      - ../../configs/runtime.yaml:/app/config.yaml:ro
+      - ../../models:/app/models:ro
       - hf_cache:/root/.cache/huggingface
       - tts_venv:/app/.venv
     environment:
