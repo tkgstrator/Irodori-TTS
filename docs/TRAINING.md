@@ -321,7 +321,36 @@ outputs/<speaker>_lora/
     └── ...
 ```
 
-`samples/` を聴いて checkpoint を決定 → `configs/runtime.yaml` に登録 → `docker compose up tts` で推論サーバから呼べます。
+`samples/` を聴いて checkpoint を決定 → `scripts/lora/export_lora_to_safetensors.py` で単一 `.safetensors` に書き出し → `data/LoRA/` に置いて推論サーバを再起動、という流れになります。サーバ側の詳細は `docs/SERVER.md` を参照。
+
+### `adapter_model.safetensors` に埋め込まれる metadata
+
+`train.py` は checkpoint を保存するたびに `adapter_model.safetensors` の `__metadata__` に学習時情報をフラットに注入します。safetensors は str→str 辞書しか持てないので値はすべて文字列です:
+
+| key                   | 内容 |
+|-----------------------|------|
+| `uuid`                | 学習 run の UUID。resume 時は既存 `.safetensors` から読み戻して同一を維持 |
+| `model_name`          | W&B run name / output dir 名 |
+| `speaker`             | `data/<speaker>/config.yaml` の `speaker.name`（無ければ `id`） |
+| `base_model`          | `--init-checkpoint` で指定したベースモデルのパス |
+| `step`                | 保存時の optimizer step |
+| `epoch`               | `step / optim_steps_per_epoch` の整数値 |
+| `val_loss`            | best ckpt のときのみ（小数 6 桁） |
+| `created_at`          | ISO8601（UTC） |
+| `lora_r`              | `train_cfg.lora_r` |
+| `lora_alpha`          | `train_cfg.lora_alpha` |
+| `lora_dropout`        | `train_cfg.lora_dropout`（小数 6 桁） |
+| `lora_target_modules` | `train_cfg.lora_target_modules`（例: `diffusion_attn`） |
+
+加えて PEFT が自動で書く `format: "pt"` も保持されます。確認:
+
+```python
+from safetensors import safe_open
+with safe_open("outputs/ema_lora/checkpoint_0004000/adapter_model.safetensors", framework="pt") as f:
+    print(f.metadata())
+```
+
+この metadata は `scripts/lora/export_lora_to_safetensors.py` で単一 `.safetensors` に書き出すときもそのまま持ち回されるので、サーバに配信するファイル 1 個から「いつ・どのベースから・どの speaker で・何 epoch 回したか」が復元できます。配信向けの `name` / `uuid` / `defaults` / `adapter_config` は export スクリプトが別途上書き / 追加します（`docs/SERVER.md` §3 参照）。
 
 ---
 
