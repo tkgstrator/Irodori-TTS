@@ -15,13 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
-import torch.distributed as dist
+import torch.distributed as dist  # pyright: ignore[reportMissingImports]
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 
 from irodori_tts.config import (
     ModelConfig,
-    SampleGenerationConfig,
     TrainConfig,
     dump_configs,
     load_experiment_yaml,
