@@ -75,12 +75,19 @@ uv run --no-sync python prepare_manifest.py \
 
 ```yaml
 speaker:
-  id: <speaker>              # ディレクトリ名と一致させる
-  name: <話者の正規名>         # 任意
+  id: <speaker>              # ディレクトリ名と一致させる短い識別子
+  label: <display name>      # LoRA 配布ラベル（キャラ名 / 演者名 / 任意の識別子）
 
+# cleaning ブロックはすべて任意。演者ベース学習など話者特性が 1 つに決められない
+# データでは丸ごと省略して OK。
 cleaning:
-  first_person: <一人称>      # 話者の規定一人称（例: 私, ボク, あたし）
+  first_person: <一人称>      # 例: 私, ボク, あたし
   addressing: chan           # chan / san / kun / yobisute のいずれか
+  characters:                # データに登場するキャラクター一覧（primary name + aliases）
+    - name: キャラA
+      aliases: [Aたん, Aちゃん]
+    - name: キャラB
+      aliases: []
 
 sample_texts:                # checkpoint A/B 試聴用の固定プロンプト
   - こんにちは、今日はいい天気ですね。
@@ -91,10 +98,13 @@ sample_texts:                # checkpoint A/B 試聴用の固定プロンプト
 ```
 
 - **`speaker.id`** — ディレクトリ名と一致させる短い識別子。
-- **`speaker.name`** — 正規フルネーム（任意）。
+- **`speaker.label`** — LoRA として配布するときに使うラベル。1 キャラの学習ならそのキャラ名、1 演者で複数キャラ混在なら演者名、といった使い分け。`train.py` が `adapter_model.safetensors` の `speaker` メタデータキーに焼き、`scripts/lora/export_lora_to_safetensors.py` にもそのまま持ち回される。
 - **`cleaning.first_person`** — 話者が使う規定の一人称（例: `私`, `ボク`, `あたし`）。LLM クリーニングの判断材料として読まれる。
 - **`cleaning.addressing`** — 他者への呼びかけ形式。`chan` / `san` / `kun` / `yobisute` のいずれか。
+- **`cleaning.characters`** — データに登場するキャラクターの辞書。`name` が primary、`aliases` はあだ名や別表記。LLM クリーニングが人名として認識すべき文字列の正解集合として使う。演者ベースで複数キャラが混ざるケースでは複数エントリを並べる。
 - **`sample_texts`** — checkpoint A/B 試聴用の固定プロンプト。`make_speaker_config.py` が `sample_generation.prompts` に展開する。空だとエラー。
+
+キャラベースで 1 キャラ固定なら `cleaning.characters` に 1 件だけ入れる。演者ベースで複数キャラを混ぜるなら `cleaning.first_person` / `cleaning.addressing` は 1 つに決められないので省略し、`cleaning.characters` だけ列挙する運用になります。
 
 ### HuggingFace へのアップロード
 
