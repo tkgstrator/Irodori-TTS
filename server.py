@@ -42,6 +42,7 @@ from irodori_tts.vds import (
     parse_json,
     parse_text,
 )
+from irodori_tts.vds.shortcodes import expand_shortcodes
 from irodori_tts.vds.parser import ParseError
 
 FIXED_SECONDS = 30.0
@@ -546,6 +547,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
         """Single-cue synthesis. Returns WAV by default, raw PCM16 mono when Accept: audio/pcm."""
         if not req.text:
             raise HTTPException(status_code=422, detail="'text' is required")
+        req.text = expand_shortcodes(req.text)
         if req.speaker_id and req.caption:
             raise HTTPException(
                 status_code=422,
