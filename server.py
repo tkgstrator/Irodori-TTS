@@ -589,7 +589,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
                 raise HTTPException(status_code=500, detail=f"synthesis failed: {e}") from e
 
             audio = result.audio
-            audio_np = audio.squeeze(0).cpu().numpy() if audio.ndim == 2 else audio.cpu().numpy()
+            audio_np = audio.squeeze(0).cpu().float().numpy() if audio.ndim == 2 else audio.cpu().float().numpy()
             audio_np = _apply_fade(audio_np, int(result.sample_rate))
             headers = {
                 "X-TTS-Used-Seed": str(int(result.used_seed)),
@@ -666,9 +666,9 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
 
         audio = result.audio
         if audio.ndim == 2:
-            audio_np = audio.squeeze(0).cpu().numpy()
+            audio_np = audio.squeeze(0).cpu().float().numpy()
         else:
-            audio_np = audio.cpu().numpy()
+            audio_np = audio.cpu().float().numpy()
         audio_np = _apply_fade(audio_np, int(result.sample_rate))
 
         headers = {
@@ -741,7 +741,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             )
             result = runtime.synthesize(sampling_req, log_fn=logger.debug if cfg.show_timings else None)
             audio = result.audio
-            audio_np = audio.squeeze(0).cpu().numpy() if audio.ndim == 2 else audio.cpu().numpy()
+            audio_np = audio.squeeze(0).cpu().float().numpy() if audio.ndim == 2 else audio.cpu().float().numpy()
             return _apply_fade(audio_np, int(result.sample_rate)), int(result.sample_rate)
 
         # LoRA speaker path
@@ -818,7 +818,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
 
         result = runtime.synthesize(sampling_req, log_fn=logger.debug if cfg.show_timings else None)
         audio = result.audio
-        audio_np = audio.squeeze(0).cpu().numpy() if audio.ndim == 2 else audio.cpu().numpy()
+        audio_np = audio.squeeze(0).cpu().float().numpy() if audio.ndim == 2 else audio.cpu().float().numpy()
         return _apply_fade(audio_np, int(result.sample_rate)), int(result.sample_rate)
 
     def _to_pcm16(audio_np: np.ndarray) -> bytes:
