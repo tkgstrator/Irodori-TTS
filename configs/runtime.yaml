@@ -11,6 +11,13 @@ codec_deterministic_encode: true
 codec_deterministic_decode: true
 enable_watermark: false
 
+# VoiceDesign (caption) runtime — loaded alongside the LoRA base model.
+# If both caption_checkpoint and caption_hf_repo are omitted, caption
+# speakers in VDS scripts will return 501.
+caption_checkpoint: models/Irodori-TTS-500M-v2-VoiceDesign/model.safetensors
+caption_hf_repo: Aratako/Irodori-TTS-500M-v2-VoiceDesign
+caption_hf_filename: model.safetensors
+
 # LoRA adapters are auto-discovered as single-file .safetensors exports under
 # this directory. Each file carries its own metadata (name, uuid, defaults,
 # adapter_config) so no per-speaker block is required.

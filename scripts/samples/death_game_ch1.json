@@ -1,0 +1,366 @@
+{
+  "version": 1,
+  "title": "デスゲームの罠 第1章 目覚めと悪意の箱庭",
+  "defaults": {
+    "gap": 1.0,
+    "num_steps": 40
+  },
+  "speakers": {
+    "emma": {
+      "type": "lora",
+      "uuid": "2628aa1b-19f9-5ad9-8a5e-e4da9ef5ebc1"
+    },
+    "hiro": {
+      "type": "lora",
+      "uuid": "96aa50fc-5f48-5fb6-95a1-4688fd311f69"
+    },
+    "sherry": {
+      "type": "lora",
+      "uuid": "630eb915-5d9b-53f4-868e-5dce55a5b5d7"
+    },
+    "gamemaster": {
+      "type": "caption",
+      "caption": "デスゲームのゲームマスター。ボイスチェンジャーで声を変えており、男か女か、大人か子供かすらわからない。落ち着いた丁寧な物言いとは裏腹に、底の知れない悪意を感じる。"
+    }
+  },
+  "cues": [
+    {
+      "kind": "scene",
+      "name": "目覚め"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "う、うぅん……ここは、どこ……？"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "ボク、学校にいたはずじゃ……"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "……気がついたか。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "あ……ヒロちゃん！？ ヒロちゃんだよね！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "あの、あのね、色々あったけど、ヒロちゃんにまた会えてよかった……！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "気安く触れないでほしい。忘れてもらっては困る。私は君が嫌いなんだ。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "え……ヒ、ヒロちゃん……？"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "馴れ馴れしく呼ばないでくれ。私たちはもう、友達でもなんでもない。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "そんな……ボク、またヒロちゃんと一緒に……"
+    },
+    {
+      "kind": "scene",
+      "name": "シェリー登場"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "ふぁぁ……よく寝ましたー。あれ、ここどこですかー？"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "えっと……あなたも、ここに連れてこられたの？"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "おや、見知らぬお顔がふたつ。そしてこの無機質なコンクリートの壁……！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "これは間違いありません。事件の匂いがします！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "……君は誰だ。状況が分かっているのか。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "事件があるところに私あり、この名探偵にお任せください！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "探偵……？ ふざけているのか。ここは誘拐犯の監禁場所かもしれないんだぞ。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "大丈夫です。きっと今回も真犯人を見つけられますよ！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "あ、あのね、シェリーちゃん……だよね？ ボクは桜羽エマ。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "エマさんですね！ よろしくお願いします！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "私は二階堂ヒロだ。呑気に自己紹介している場合じゃないだろう。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "いやー、それにしてもエマさんとヒロさん、とても仲が悪そうですねー。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "いやー、学校によくいる女子の光景だなーって。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "君……少し黙っていてくれないか。思考の邪魔だ。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "ヒロちゃん、怒らないであげて。きっとシェリーちゃんも混乱してるんだよ。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "君こそ引っ込んでいろ。余計な口を挟まないでほしい。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "ご、ごめんなさい……。"
+    },
+    {
+      "kind": "scene",
+      "name": "密室の発見"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "あ、扉には鍵がかかってますねー。窓もありません！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "完全な密室というわけか。となると、目的は身代金か、それとも……"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "もしかして、私たち、デスゲームに参加させられちゃったとか！？"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "ふざけたことを言うな。非現実的だ。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "デ、デスゲーム……？ ボクたち、殺されちゃうの……？"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "大丈夫ですよエマさん！ この名探偵が華麗に謎を解いてみせますから！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "……頭が痛くなってきた。どいつもこいつも、状況の深刻さを理解していない。"
+    },
+    {
+      "kind": "scene",
+      "name": "ゲームマスターの宣告"
+    },
+    {
+      "kind": "pause",
+      "duration": 2.0
+    },
+    {
+      "kind": "speech",
+      "speaker": "gamemaster",
+      "text": "あー、あー。マイクテスト、マイクテスト。諸君、聞こえているかな？"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "スピーカーから声が……！ お前が私たちをここに閉じ込めたのか！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "だ、誰なの……！？"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "あ、それ私も思いました。有名人の方でしょうか。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "gamemaster",
+      "text": "私はゲームマスター。君たちをこの素晴らしい舞台へ招待した者だ。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "ゲームマスターだと？ 悪趣味な冗談だ。今すぐ私たちを解放しろ！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "gamemaster",
+      "text": "それではルールを説明しよう。難しいものではない。君たちが理解できる程度には、ね。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "ルールって……なんのこと……？ ボクたち、何もしないよ！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "gamemaster",
+      "text": "勝者には生を、敗者には死を。ただそれだけのシンプルなゲームだ。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "死……？ 本気で言っているのか。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "わぁ、やっぱりデスゲームじゃないですか！ 私の推理、大当たりですね！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "喜んでいる場合か！ 命がかかっていると言っているんだぞ！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "gamemaster",
+      "text": "安心してほしい、不公平はない。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "そんなの嫌だよ……ボクたち、どうしてこんな目に……"
+    },
+    {
+      "kind": "speech",
+      "speaker": "gamemaster",
+      "text": "君たちには、考える時間はあっても、迷う余裕はない。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "gamemaster",
+      "text": "では、始めよう。君たちの選択が、どのような結末を導くのか。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "待て！ 答えろ！"
+    },
+    {
+      "kind": "scene",
+      "name": "通信途絶"
+    },
+    {
+      "kind": "pause",
+      "duration": 2.0
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "……通信が切れた。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "どうしよう、ヒロちゃん……ボク、怖いよ……。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "近寄るなと言ったはずだ。私は君を信用していない。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "そんな……ボクたち、協力しないと……！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "君と協力するくらいなら、一人で切り抜ける道を探す。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "ふむふむ。ヒロさんはエマさんを疑っているんですねー！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "君もだ、シェリー。誰が敵かもわからない状況で、簡単に人を信じるつもりはない。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "いやー、疑心暗鬼ってやつですね！ ミステリーの定番展開でワクワクします！"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "シェリーちゃん……そんなこと言ってる場合じゃないよ……。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "emma",
+      "text": "ボク……どうしたらいいの……。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "hiro",
+      "text": "誰も頼るな。自分の身は自分で守れ。それができないなら……ここで終わりだ。"
+    },
+    {
+      "kind": "speech",
+      "speaker": "sherry",
+      "text": "さぁさぁ、命を懸けた謎解きの幕開けです！ 気を引き締めていきましょう！"
+    }
+  ]
+}

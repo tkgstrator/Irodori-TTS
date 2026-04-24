@@ -1,14 +1,15 @@
 # Irodori-TTS 推論サーバガイド
 
-学習済みの LoRA 話者アダプタを FastAPI で配信する `server.py` の使い方です。1 つのベースモデル + 複数 LoRA を 1 プロセスに載せ、リクエストごとに active adapter を切り替えて合成します。
+学習済みの LoRA 話者アダプタを FastAPI で配信する `server.py` の使い方です。1 つのベースモデル + 複数 LoRA を 1 プロセスに載せ、リクエストごとに active adapter を切り替えて合成します。オプションで VoiceDesign（caption）ランタイムを並載すると、自然文による話者記述での合成も可能です。
 
 ---
 
 ## 1. 全体像
 
-- **ベースモデル**: `configs/runtime.yaml` の `base_checkpoint`（ローカルに無ければ `base_hf_repo` から HF に取りに行きます）を 1 回だけ読み込み。
+- **ベースモデル（LoRA）**: `configs/runtime.yaml` の `base_checkpoint`（ローカルに無ければ `base_hf_repo` から HF に取りに行きます）を 1 回だけ読み込み。
 - **話者アダプタ**: `lora_dir`（既定 `models/LoRA/`）配下の `.safetensors` を起動時にスキャンし、それぞれに埋め込まれた metadata (`name` / `uuid` / `defaults` / `adapter_config`) から話者を自動登録します。YAML 側に話者ブロックを書く必要はありません。
-- **推論**: `/synth` にテキストと `speaker_id` (= 話者 UUID) を POST すると、WAV が返ります。`no_ref=true` 固定 (voice-cloning ではなく LoRA で話者情報を持つ運用) です。
+- **VoiceDesign（caption）ランタイム**: `caption_hf_repo`（または `caption_checkpoint`）が設定されていれば、VoiceDesign チェックポイントを第 2 ランタイムとしてロードします。自然文による話者記述（caption）で合成が可能になります。
+- **推論**: `/synth` にテキストと `speaker_id` (= 話者 UUID) または `caption`（自然文記述）を POST すると、WAV が返ります。
 
 ---
 
@@ -28,6 +29,14 @@ codec_deterministic_encode: true
 codec_deterministic_decode: true
 enable_watermark: false
 
+caption_hf_repo: Aratako/Irodori-TTS-500M-v2-VoiceDesign
+caption_hf_filename: model.safetensors
+
+tail_window_size: 20
+tail_std_threshold: 0.05
+tail_mean_threshold: 0.1
+show_timings: true
+
 lora_dir: models/LoRA
 ```
 
@@ -43,6 +52,12 @@ lora_dir: models/LoRA
 | `codec_repo`                 | DACVAE codec の HF repo |
 | `codec_deterministic_encode/decode` | 決定論モード（同じ入力 → 同じ出力） |
 | `enable_watermark`           | watermark 付与を有効にするか（通常 `false`） |
+| `caption_checkpoint`         | VoiceDesign チェックポイントのローカルパス。省略時は `caption_hf_repo` から pull |
+| `caption_hf_repo` / `caption_hf_filename` | VoiceDesign の HF fallback。両方省略で caption 無効 |
+| `tail_window_size`           | 末尾トリミングのウィンドウサイズ（デフォルト `20`） |
+| `tail_std_threshold`         | 末尾トリミングの標準偏差閾値（デフォルト `0.05`） |
+| `tail_mean_threshold`        | 末尾トリミングの平均値閾値（デフォルト `0.1`） |
+| `show_timings`               | 合成のステージ別タイミングをログ出力（デフォルト `true`） |
 | `lora_dir`                   | `.safetensors` LoRA を探すディレクトリ |
 
 `speakers:` ブロックを使った手動登録もまだサポートされていますが、`lora_dir` による auto-discover が標準ルートです。
@@ -151,6 +166,10 @@ docker compose -f docker/runtime/compose.yaml logs -f    # ログ追跡
 
 ### `POST /synth`
 
+3 つのモードがあります。`speaker_id` + `text` を送ると **LoRA 単発モード**、`caption` + `text` を送ると **VoiceDesign 単発モード**、`script` を送ると **ドラマモード**（VDS）になります。
+
+#### LoRA 単発モード（speaker_id + text → WAV）
+
 リクエスト:
 
 ```json
@@ -160,9 +179,7 @@ docker compose -f docker/runtime/compose.yaml logs -f    # ログ追跡
   "seed": 42,
   "num_steps": 40,
   "cfg_scale_text": 3.0,
-  "cfg_scale_speaker": 5.0,
-  "speaker_kv_scale": null,
-  "truncation_factor": null
+  "cfg_scale_speaker": 5.0
 }
 ```
 
@@ -179,14 +196,123 @@ docker compose -f docker/runtime/compose.yaml logs -f    # ログ追跡
 
 省略した項目は LoRA metadata の `defaults` → サーバ内部の既定値 (`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`) の順にフォールバックします。
 
-レスポンス: `audio/wav` バイナリ。ヘッダに
+レスポンス: `audio/wav` バイナリ。ヘッダに `X-TTS-Speaker-Id` / `X-TTS-Speaker-Name` / `X-TTS-Used-Seed` / `X-TTS-Sample-Rate` が付きます。固定で 30 秒長の波形が返るので、無音末尾が気になる場合はクライアント側で trim してください。
 
-- `X-TTS-Speaker-Id`
-- `X-TTS-Speaker-Name` (URL-encoded)
-- `X-TTS-Used-Seed`
-- `X-TTS-Sample-Rate`
+```bash
+# LoRA 単発合成
+curl -s http://localhost:8765/synth \
+  -H 'Content-Type: application/json' \
+  -d '{"speaker_id":"7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb","text":"こんにちは"}' \
+  -o output.wav
+```
 
-が付きます。固定で 30 秒長の波形が返るので、無音末尾が気になる場合はクライアント側で trim してください。
+#### VoiceDesign 単発モード（caption + text → WAV）
+
+`speaker_id` の代わりに `caption`（自然文による話者記述）を指定します。`speaker_id` と `caption` は**排他**です。`caption_hf_repo` が設定されていないサーバでは 501 を返します。
+
+```json
+{
+  "caption": "落ち着いた女性の声で、やわらかく自然に",
+  "text": "こんにちは、今日はいい天気ですね。",
+  "num_steps": 40,
+  "cfg_scale_text": 3.0,
+  "cfg_scale_caption": 3.0
+}
+```
+
+| フィールド            | 必須 | 説明 |
+|-----------------------|------|------|
+| `caption`             | ◯    | 自然文による話者記述 |
+| `text`                | ◯    | 合成するテキスト |
+| `cfg_scale_caption`   | 任意 | caption CFG scale（デフォルト `3.0`） |
+| `seed` / `num_steps` / `cfg_scale_text` / `truncation_factor` | 任意 | LoRA モードと同じ |
+
+`speaker_kv_scale` / `cfg_scale_speaker` は VoiceDesign モードでは無視されます。
+
+```bash
+# VoiceDesign 単発合成
+curl -s http://localhost:8765/synth \
+  -H 'Content-Type: application/json' \
+  -d '{"caption":"落ち着いた女性の声","text":"こんにちは"}' \
+  -o output.wav
+```
+
+#### ドラマモード（VDS-JSON → PCM ストリーム / WAV）
+
+`script` フィールドに VDS-JSON オブジェクトを渡すと、複数話者・複数セリフの台本を一括合成します。フォーマットの詳細は `docs/VDS.md` を参照。
+
+出力形式は `Accept` ヘッダーで切り替えます:
+
+| Accept ヘッダー | 出力 | 用途 |
+|---|---|---|
+| `audio/pcm`（デフォルト） | 生 PCM16 mono ストリーム。cue ごとに逐次送出 | Discord Bot（低レイテンシ再生） |
+| `audio/wav` | 全 cue を合成後、gap/pause 込みの結合 WAV を返す | ダウンロード・プレビュー |
+
+レスポンスヘッダーに `X-TTS-Sample-Rate`（PCM のサンプルレート）と `X-TTS-Cue-Count`（speech cue 数）が付きます。
+
+```bash
+# ドラマ — PCM ストリーム（デフォルト）
+curl -s http://localhost:8765/synth \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "script": {
+      "version": 1,
+      "defaults": {"num_steps": 40, "gap": 0.3},
+      "speakers": {
+        "alice": {"type": "lora", "uuid": "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb"},
+        "bob":   {"type": "lora", "uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}
+      },
+      "cues": [
+        {"kind": "speech", "speaker": "alice", "text": "おはよう。"},
+        {"kind": "speech", "speaker": "bob",   "text": "おはようございます。"},
+        {"kind": "pause",  "duration": 1.0},
+        {"kind": "speech", "speaker": "alice", "text": "今日はいい天気ですね。"}
+      ]
+    }
+  }' \
+  -o output.pcm
+
+# PCM → WAV 変換（ffmpeg）
+ffmpeg -f s16le -ar 24000 -ac 1 -i output.pcm output.wav
+```
+
+```bash
+# ドラマ — 結合 WAV
+curl -s http://localhost:8765/synth \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: audio/wav' \
+  -d '{
+    "script": {
+      "version": 1,
+      "speakers": {
+        "alice": {"type": "lora", "uuid": "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb"}
+      },
+      "cues": [
+        {"kind": "speech", "speaker": "alice", "text": "おはようございます。"},
+        {"kind": "pause",  "duration": 0.5},
+        {"kind": "speech", "speaker": "alice", "text": "今日はいい天気ですね。"}
+      ]
+    }
+  }' \
+  -o drama.wav
+```
+
+### `POST /synth/vds`
+
+`.vds` テキストファイルのアップロードによるドラマ合成。出力形式は `/synth` のドラマモードと同じく `Accept` ヘッダーで切り替えます。
+
+```bash
+# .vds ファイル → PCM ストリーム
+curl -s http://localhost:8765/synth/vds \
+  -F 'file=@script.vds' \
+  -o output.pcm
+
+# .vds ファイル → 結合 WAV
+curl -s http://localhost:8765/synth/vds \
+  -H 'Accept: audio/wav' \
+  -F 'file=@script.vds' \
+  -o drama.wav
+```
 
 ---
 
