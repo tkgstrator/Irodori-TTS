@@ -542,8 +542,8 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             tail_mean_threshold=cfg.tail_mean_threshold,
         )
 
-    def _synth_single(req: SynthRequest) -> Response:
-        """Single-cue synthesis: speaker_id + text → WAV (LoRA) or caption + text → WAV (VoiceDesign)."""
+    def _synth_single(req: SynthRequest, request: Request) -> Response:
+        """Single-cue synthesis. Returns WAV by default, raw PCM16 mono when Accept: audio/pcm."""
         if not req.text:
             raise HTTPException(status_code=422, detail="'text' is required")
         if req.speaker_id and req.caption:
@@ -589,13 +589,15 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             audio = result.audio
             audio_np = audio.squeeze(0).cpu().numpy() if audio.ndim == 2 else audio.cpu().numpy()
             audio_np = _apply_fade(audio_np, int(result.sample_rate))
-            buf = io.BytesIO()
-            sf.write(buf, audio_np, int(result.sample_rate), format="WAV", subtype="PCM_16")
             headers = {
                 "X-TTS-Used-Seed": str(int(result.used_seed)),
                 "X-TTS-Sample-Rate": str(int(result.sample_rate)),
             }
-            return Response(content=buf.getvalue(), media_type="audio/wav", headers=headers)
+            if _wants_wav(request):
+                buf = io.BytesIO()
+                sf.write(buf, audio_np, int(result.sample_rate), format="WAV", subtype="PCM_16")
+                return Response(content=buf.getvalue(), media_type="audio/wav", headers=headers)
+            return Response(content=_to_pcm16(audio_np), media_type="audio/pcm", headers=headers)
 
         # LoRA speaker path
         try:
@@ -667,16 +669,17 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             audio_np = audio.cpu().numpy()
         audio_np = _apply_fade(audio_np, int(result.sample_rate))
 
-        buf = io.BytesIO()
-        sf.write(buf, audio_np, int(result.sample_rate), format="WAV", subtype="PCM_16")
-        wav_bytes = buf.getvalue()
         headers = {
             "X-TTS-Speaker-Id": spec.uuid,
             "X-TTS-Speaker-Name": urllib.parse.quote(spec.name),
             "X-TTS-Used-Seed": str(int(result.used_seed)),
             "X-TTS-Sample-Rate": str(int(result.sample_rate)),
         }
-        return Response(content=wav_bytes, media_type="audio/wav", headers=headers)
+        if _wants_wav(request):
+            buf = io.BytesIO()
+            sf.write(buf, audio_np, int(result.sample_rate), format="WAV", subtype="PCM_16")
+            return Response(content=buf.getvalue(), media_type="audio/wav", headers=headers)
+        return Response(content=_to_pcm16(audio_np), media_type="audio/pcm", headers=headers)
 
     @app.post(
         "/synth",
@@ -686,8 +689,8 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
                     "audio/wav": {"schema": {"type": "string", "format": "binary"}},
                     "audio/pcm": {"schema": {"type": "string", "format": "binary"}},
                 },
-                "description": "Single-cue (speaker_id+text → WAV) or drama mode "
-                "(script → Accept: audio/pcm for stream, audio/wav for file).",
+                "description": "Accept: audio/wav for WAV file, audio/pcm (default) "
+                "for raw PCM16 mono. Both single-cue and drama mode supported.",
             }
         },
     )
@@ -700,7 +703,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             for w in warnings:
                 logger.warning("VDS warning: %s", w)
             return _render_drama(script, request)
-        return _synth_single(req)
+        return _synth_single(req, request)
 
     def _synth_cue(
         cue: SpeechCue,
