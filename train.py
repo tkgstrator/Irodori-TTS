@@ -2132,40 +2132,28 @@ def main() -> None:
         dist.barrier()
     if is_main_process and distributed:
         print(f"DDP enabled: world_size={world_size} (local_rank={local_rank})")
-    wandb_run = None
-    if train_cfg.wandb_enabled and is_main_process:
-        try:
-            import wandb
-        except ImportError as exc:
-            raise RuntimeError(
-                "W&B logging is enabled, but `wandb` is not installed. "
-                "Install it with `pip install wandb`."
-            ) from exc
-        wandb_settings = None
-        cf_id = os.environ.get("CF_ACCESS_CLIENT_ID")
-        cf_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET")
-        if cf_id and cf_secret:
-            wandb_settings = wandb.Settings(
-                x_extra_http_headers={
-                    "CF-Access-Client-Id": cf_id,
-                    "CF-Access-Client-Secret": cf_secret,
-                }
-            )
-        wandb_run = wandb.init(
-            project=train_cfg.wandb_project or None,
-            entity=train_cfg.wandb_entity or None,
-            name=train_cfg.wandb_run_name or None,
+    from irodori_tts.wandb_client import WandbClient, from_env as _wandb_cfg_from_env
+
+    wandb_client = WandbClient(
+        _wandb_cfg_from_env(
+            enabled=train_cfg.wandb_enabled and is_main_process,
+            project=train_cfg.wandb_project,
+            entity=train_cfg.wandb_entity,
+            run_name=train_cfg.wandb_run_name,
             mode=train_cfg.wandb_mode or "online",
-            dir=str(output_dir),
-            config={
-                "model": asdict(model_cfg),
-                "train": asdict(train_cfg),
-                "script": "train.py",
-            },
-            settings=wandb_settings,
-        )
+        ),
+        config={
+            "model": asdict(model_cfg),
+            "train": asdict(train_cfg),
+            "script": "train.py",
+        },
+        output_dir=output_dir,
+    )
+    wandb_run = wandb_client.run
+    if wandb_client.enabled:
         print(
-            f"W&B enabled: project={train_cfg.wandb_project} mode={train_cfg.wandb_mode} run={wandb_run.name if wandb_run is not None else train_cfg.wandb_run_name}"
+            f"W&B enabled: project={train_cfg.wandb_project} mode={train_cfg.wandb_mode} "
+            f"run={wandb_client.name} base_url={wandb_client.base_url or '<default>'}"
         )
 
     if distributed:
