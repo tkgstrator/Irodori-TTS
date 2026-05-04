@@ -44,7 +44,7 @@
 #                        further training).
 #
 # Hyperparameter overrides (all optional — leave unset to use the template
-# configs/train_500m_v2_speaker_lora.yaml defaults). Each one, if set, is
+# configs/train_500m_v2_lora.template.yaml defaults). Each one, if set, is
 # passed to train.py as a CLI flag and therefore overrides the config value.
 #
 #   MAX_EPOCHS                    -> --max-epochs

@@ -2,7 +2,7 @@
 """Generate configs/train_500m_v2_<speaker>_lora.yaml from the base template.
 
 Reads two inputs:
-  1. configs/train_500m_v2_speaker_lora.yaml  (shared LoRA template)
+  1. configs/train_500m_v2_lora.template.yaml  (shared LoRA template)
   2. data/<speaker>/config.yaml               (per-speaker config: name,
      cleaning hints, sample_texts for checkpoint A/B listening)
 
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-TEMPLATE = Path("configs/train_500m_v2_speaker_lora.yaml")
+TEMPLATE = Path("configs/train_500m_v2_lora.template.yaml")
 
 # Targets for how many ckpts / val points a run should emit. These drive
 # save_every / valid_every derivation below. Everything else (batch size,
