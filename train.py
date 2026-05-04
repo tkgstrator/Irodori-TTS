@@ -2132,7 +2132,8 @@ def main() -> None:
         dist.barrier()
     if is_main_process and distributed:
         print(f"DDP enabled: world_size={world_size} (local_rank={local_rank})")
-    from irodori_tts.wandb_client import WandbClient, from_env as _wandb_cfg_from_env
+    from irodori_tts.wandb_client import WandbClient
+    from irodori_tts.wandb_client import from_env as _wandb_cfg_from_env
 
     wandb_client = WandbClient(
         _wandb_cfg_from_env(

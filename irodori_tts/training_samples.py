@@ -51,13 +51,13 @@ def generate_training_samples(
     model_cfg: ModelConfig,
     train_cfg: TrainConfig,
     sample_cfg: SampleGenerationConfig,
-    tokenizer: "PretrainedTextTokenizer",
-    caption_tokenizer: "PretrainedTextTokenizer | None",
+    tokenizer: PretrainedTextTokenizer,
+    caption_tokenizer: PretrainedTextTokenizer | None,
     codec: DACVAECodec,
     model_device: torch.device,
     step: int,
     output_dir: Path,
-    wandb_client: "WandbClient | None",
+    wandb_client: WandbClient | None,
     log_fn: Any | None = None,
 ) -> None:
     """Synthesize the configured prompts and ship to W&B / disk.
