@@ -346,35 +346,6 @@ def prune_best_val_loss_checkpoints(
     return checkpoints
 
 
-def _upload_best_checkpoint_artifact(
-    *,
-    wandb_run,
-    path: Path,
-    step: int,
-    val_loss: float,
-) -> None:
-    if wandb_run is None:
-        return
-    try:
-        import wandb
-    except ImportError:
-        return
-    try:
-        artifact_name = f"lora-best-{wandb_run.name}"
-        artifact = wandb.Artifact(
-            name=artifact_name,
-            type="model",
-            metadata={"step": int(step), "val_loss": float(val_loss)},
-        )
-        if path.is_dir():
-            artifact.add_dir(str(path))
-        else:
-            artifact.add_file(str(path))
-        wandb_run.log_artifact(artifact, aliases=["latest", "best"])
-    except Exception as exc:  # pragma: no cover - best-effort upload
-        print(f"warning: failed to upload best checkpoint artifact: {exc}")
-
-
 def maybe_save_best_val_loss_checkpoint(
     *,
     output_dir: Path,
@@ -3283,12 +3254,6 @@ def main() -> None:
                                     float(valid_metrics["loss"]),
                                 )
                             )
-                            _upload_best_checkpoint_artifact(
-                                wandb_run=wandb_run,
-                                path=best_path,
-                                step=step,
-                                val_loss=float(valid_metrics["loss"]),
-                            )
                             if sample_cfg.enabled and sample_cfg.on_best_val:
                                 _maybe_emit_samples(step)
 
@@ -3406,12 +3371,6 @@ def main() -> None:
                             best_path.name,
                             float(valid_metrics["loss"]),
                         )
-                    )
-                    _upload_best_checkpoint_artifact(
-                        wandb_run=wandb_run,
-                        path=best_path,
-                        step=step,
-                        val_loss=float(valid_metrics["loss"]),
                     )
                     if sample_cfg.enabled and sample_cfg.on_best_val:
                         _maybe_emit_samples(step)
