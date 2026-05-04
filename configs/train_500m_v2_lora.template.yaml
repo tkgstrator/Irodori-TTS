@@ -163,8 +163,8 @@ train:
   # exporting the matching env var (e.g. via .env for docker compose).
   # The per-speaker run name is set by scripts/train/train_multi_speaker.sh
   # via --wandb-run-name "${speaker}_lora" at launch time.
-  wandb_enabled: false
-  wandb_project: ${WANDB_PROJECT}
+  wandb_enabled: true
+  wandb_project: ${WANDB_PROJECT:irodori-tts}
   wandb_entity: ${WANDB_ENTITY}
   wandb_mode: ${WANDB_MODE:online}
 

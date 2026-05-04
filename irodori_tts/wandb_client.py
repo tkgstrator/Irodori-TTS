@@ -120,6 +120,11 @@ class WandbClient:
             return None
         return self._wandb.Audio(audio, sample_rate=sample_rate, caption=caption)
 
+    def set_summary(self, key: str, value: Any) -> None:
+        if self._run is None:
+            return
+        self._run.summary[key] = value
+
     def finish(self, exit_code: int | None = None) -> None:
         if self._run is None:
             return

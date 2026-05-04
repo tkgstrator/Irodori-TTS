@@ -17,6 +17,7 @@ from .inference_runtime import (
 
 if TYPE_CHECKING:
     from .tokenizer import PretrainedTextTokenizer
+    from .wandb_client import WandbClient
 
 
 def load_codec_for_sampling(
@@ -56,7 +57,7 @@ def generate_training_samples(
     model_device: torch.device,
     step: int,
     output_dir: Path,
-    wandb_run: Any | None,
+    wandb_client: "WandbClient | None",
     log_fn: Any | None = None,
 ) -> None:
     """Synthesize the configured prompts and ship to W&B / disk.
@@ -83,9 +84,7 @@ def generate_training_samples(
         )
 
         log_payload: dict[str, Any] = {}
-        wandb_module = None
-        if wandb_run is not None:
-            import wandb as wandb_module  # type: ignore
+        wandb_active = wandb_client is not None and wandb_client.enabled
 
         sample_dir = output_dir / "samples" / f"step_{step:07d}"
         if sample_cfg.save_local:
@@ -119,16 +118,16 @@ def generate_training_samples(
             if sample_cfg.save_local:
                 save_wav(sample_dir / f"{prompt.name}.wav", audio, sample_rate=sr)
 
-            if wandb_run is not None and wandb_module is not None:
+            if wandb_active:
                 audio_np = audio.squeeze(0).numpy()
-                log_payload[f"samples/{prompt.name}"] = wandb_module.Audio(
+                log_payload[f"samples/{prompt.name}"] = wandb_client.Audio(
                     audio_np,
                     sample_rate=sr,
                     caption=f"step={step}",
                 )
 
-        if wandb_run is not None and log_payload:
-            wandb_run.log(log_payload, step=step)
+        if wandb_active and log_payload:
+            wandb_client.log(log_payload, step=step)
     finally:
         if was_training:
             raw_model.train()

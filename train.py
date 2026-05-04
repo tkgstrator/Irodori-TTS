@@ -2149,7 +2149,6 @@ def main() -> None:
         },
         output_dir=output_dir,
     )
-    wandb_run = wandb_client.run
     if wandb_client.enabled:
         print(
             f"W&B enabled: project={train_cfg.wandb_project} mode={train_cfg.wandb_mode} "
@@ -2330,7 +2329,7 @@ def main() -> None:
     )
 
     speaker_name = _resolve_speaker_name(train_cfg.manifest_path)
-    run_name = (wandb_run.name if wandb_run is not None else None) or train_cfg.wandb_run_name or output_dir.name
+    run_name = wandb_client.name or train_cfg.wandb_run_name or output_dir.name
     run_uuid: str | None = None
     if args.resume is not None:
         try:
@@ -2634,7 +2633,7 @@ def main() -> None:
             model_device=device,
             step=current_step,
             output_dir=output_dir,
-            wandb_run=wandb_run,
+            wandb_client=wandb_client,
             log_fn=lambda msg: progress.write(msg) if progress is not None else None,
         )
 
@@ -3033,39 +3032,38 @@ def main() -> None:
                                 f"step={step} loss={loss_value:.6f} rf={rf_loss_value:.6f} "
                                 f"lr={lr_value:.3e}"
                             )
-                        if wandb_run is not None:
-                            metrics = {
-                                "train/loss": loss_value,
-                                "train/rf_loss": rf_loss_value,
-                                "train/lr": lr_value,
-                            }
-                            if raw_model.cfg.use_duration_predictor:
-                                metrics["train/duration_loss"] = duration_loss_value
-                                metrics["train/duration_mae_frames"] = duration_mae_frames_value
-                                if duration_only:
-                                    metrics.update(
-                                        {
-                                            "train/duration_loss_speaker": duration_group_metrics[
-                                                "duration_loss_speaker"
-                                            ],
-                                            "train/duration_mae_frames_speaker": duration_group_metrics[
-                                                "duration_mae_frames_speaker"
-                                            ],
-                                            "train/duration_samples_speaker": duration_group_metrics[
-                                                "duration_samples_speaker"
-                                            ],
-                                            "train/duration_loss_no_speaker": duration_group_metrics[
-                                                "duration_loss_no_speaker"
-                                            ],
-                                            "train/duration_mae_frames_no_speaker": duration_group_metrics[
-                                                "duration_mae_frames_no_speaker"
-                                            ],
-                                            "train/duration_samples_no_speaker": duration_group_metrics[
-                                                "duration_samples_no_speaker"
-                                            ],
-                                        }
-                                    )
-                            wandb_run.log(metrics, step=step)
+                        metrics = {
+                            "train/loss": loss_value,
+                            "train/rf_loss": rf_loss_value,
+                            "train/lr": lr_value,
+                        }
+                        if raw_model.cfg.use_duration_predictor:
+                            metrics["train/duration_loss"] = duration_loss_value
+                            metrics["train/duration_mae_frames"] = duration_mae_frames_value
+                            if duration_only:
+                                metrics.update(
+                                    {
+                                        "train/duration_loss_speaker": duration_group_metrics[
+                                            "duration_loss_speaker"
+                                        ],
+                                        "train/duration_mae_frames_speaker": duration_group_metrics[
+                                            "duration_mae_frames_speaker"
+                                        ],
+                                        "train/duration_samples_speaker": duration_group_metrics[
+                                            "duration_samples_speaker"
+                                        ],
+                                        "train/duration_loss_no_speaker": duration_group_metrics[
+                                            "duration_loss_no_speaker"
+                                        ],
+                                        "train/duration_mae_frames_no_speaker": duration_group_metrics[
+                                            "duration_mae_frames_no_speaker"
+                                        ],
+                                        "train/duration_samples_no_speaker": duration_group_metrics[
+                                            "duration_samples_no_speaker"
+                                        ],
+                                    }
+                                )
+                        wandb_client.log(metrics, step=step)
 
                 if step % train_cfg.save_every == 0 and is_main_process:
                     save_checkpoint(
@@ -3145,40 +3143,39 @@ def main() -> None:
                                     valid_metrics["num_samples"],
                                 )
                             )
-                        if wandb_run is not None:
-                            metrics = {
-                                "valid/loss": valid_metrics["loss"],
-                                "valid/rf_loss": valid_metrics["rf_loss"],
-                            }
-                            if raw_model.cfg.use_duration_predictor:
-                                metrics["valid/duration_loss"] = valid_metrics["duration_loss"]
-                                metrics["valid/duration_mae_frames"] = valid_metrics[
-                                    "duration_mae_frames"
-                                ]
-                                if duration_only:
-                                    metrics.update(
-                                        {
-                                            "valid/duration_loss_speaker": valid_metrics[
-                                                "duration_loss_speaker"
-                                            ],
-                                            "valid/duration_mae_frames_speaker": valid_metrics[
-                                                "duration_mae_frames_speaker"
-                                            ],
-                                            "valid/duration_samples_speaker": valid_metrics[
-                                                "duration_samples_speaker"
-                                            ],
-                                            "valid/duration_loss_no_speaker": valid_metrics[
-                                                "duration_loss_no_speaker"
-                                            ],
-                                            "valid/duration_mae_frames_no_speaker": valid_metrics[
-                                                "duration_mae_frames_no_speaker"
-                                            ],
-                                            "valid/duration_samples_no_speaker": valid_metrics[
-                                                "duration_samples_no_speaker"
-                                            ],
-                                        }
-                                    )
-                            wandb_run.log(metrics, step=step)
+                        metrics = {
+                            "valid/loss": valid_metrics["loss"],
+                            "valid/rf_loss": valid_metrics["rf_loss"],
+                        }
+                        if raw_model.cfg.use_duration_predictor:
+                            metrics["valid/duration_loss"] = valid_metrics["duration_loss"]
+                            metrics["valid/duration_mae_frames"] = valid_metrics[
+                                "duration_mae_frames"
+                            ]
+                            if duration_only:
+                                metrics.update(
+                                    {
+                                        "valid/duration_loss_speaker": valid_metrics[
+                                            "duration_loss_speaker"
+                                        ],
+                                        "valid/duration_mae_frames_speaker": valid_metrics[
+                                            "duration_mae_frames_speaker"
+                                        ],
+                                        "valid/duration_samples_speaker": valid_metrics[
+                                            "duration_samples_speaker"
+                                        ],
+                                        "valid/duration_loss_no_speaker": valid_metrics[
+                                            "duration_loss_no_speaker"
+                                        ],
+                                        "valid/duration_mae_frames_no_speaker": valid_metrics[
+                                            "duration_mae_frames_no_speaker"
+                                        ],
+                                        "valid/duration_samples_no_speaker": valid_metrics[
+                                            "duration_samples_no_speaker"
+                                        ],
+                                    }
+                                )
+                        wandb_client.log(metrics, step=step)
                         if es_enabled:
                             cur_val = float(valid_metrics["loss"])
                             if cur_val < es_best_val - train_cfg.early_stop_min_delta:
@@ -3186,14 +3183,13 @@ def main() -> None:
                                 es_no_improve = 0
                             else:
                                 es_no_improve += 1
-                            if wandb_run is not None:
-                                wandb_run.log(
-                                    {
-                                        "es/no_improve": es_no_improve,
-                                        "es/best_val": es_best_val,
-                                    },
-                                    step=step,
-                                )
+                            wandb_client.log(
+                                {
+                                    "es/no_improve": es_no_improve,
+                                    "es/best_val": es_best_val,
+                                },
+                                step=step,
+                            )
                             if step >= train_cfg.early_stop_min_step:
                                 if es_no_improve >= train_cfg.early_stop_patience:
                                     progress.write(
@@ -3301,38 +3297,37 @@ def main() -> None:
                             valid_metrics["num_samples"],
                         )
                     )
-                if wandb_run is not None:
-                    metrics = {
-                        "valid/loss": valid_metrics["loss"],
-                        "valid/rf_loss": valid_metrics["rf_loss"],
-                    }
-                    if raw_model.cfg.use_duration_predictor:
-                        metrics["valid/duration_loss"] = valid_metrics["duration_loss"]
-                        metrics["valid/duration_mae_frames"] = valid_metrics["duration_mae_frames"]
-                        if duration_only:
-                            metrics.update(
-                                {
-                                    "valid/duration_loss_speaker": valid_metrics[
-                                        "duration_loss_speaker"
-                                    ],
-                                    "valid/duration_mae_frames_speaker": valid_metrics[
-                                        "duration_mae_frames_speaker"
-                                    ],
-                                    "valid/duration_samples_speaker": valid_metrics[
-                                        "duration_samples_speaker"
-                                    ],
-                                    "valid/duration_loss_no_speaker": valid_metrics[
-                                        "duration_loss_no_speaker"
-                                    ],
-                                    "valid/duration_mae_frames_no_speaker": valid_metrics[
-                                        "duration_mae_frames_no_speaker"
-                                    ],
-                                    "valid/duration_samples_no_speaker": valid_metrics[
-                                        "duration_samples_no_speaker"
-                                    ],
-                                }
-                            )
-                    wandb_run.log(metrics, step=step)
+                metrics = {
+                    "valid/loss": valid_metrics["loss"],
+                    "valid/rf_loss": valid_metrics["rf_loss"],
+                }
+                if raw_model.cfg.use_duration_predictor:
+                    metrics["valid/duration_loss"] = valid_metrics["duration_loss"]
+                    metrics["valid/duration_mae_frames"] = valid_metrics["duration_mae_frames"]
+                    if duration_only:
+                        metrics.update(
+                            {
+                                "valid/duration_loss_speaker": valid_metrics[
+                                    "duration_loss_speaker"
+                                ],
+                                "valid/duration_mae_frames_speaker": valid_metrics[
+                                    "duration_mae_frames_speaker"
+                                ],
+                                "valid/duration_samples_speaker": valid_metrics[
+                                    "duration_samples_speaker"
+                                ],
+                                "valid/duration_loss_no_speaker": valid_metrics[
+                                    "duration_loss_no_speaker"
+                                ],
+                                "valid/duration_mae_frames_no_speaker": valid_metrics[
+                                    "duration_mae_frames_no_speaker"
+                                ],
+                                "valid/duration_samples_no_speaker": valid_metrics[
+                                    "duration_samples_no_speaker"
+                                ],
+                            }
+                        )
+                wandb_client.log(metrics, step=step)
                 best_val_checkpoints, best_path = maybe_save_best_val_loss_checkpoint(
                     output_dir=output_dir,
                     checkpoints=best_val_checkpoints,
@@ -3383,16 +3378,14 @@ def main() -> None:
             )
             if sample_cfg.enabled:
                 _maybe_emit_samples(step)
-            if wandb_run is not None:
-                wandb_run.summary["train/final_step"] = step
+            wandb_client.set_summary("train/final_step", step)
             progress.write(f"Training finished at step={step}.")
     finally:
         if progress is not None:
             progress.close()
         if sampling_codec is not None:
             del sampling_codec
-        if wandb_run is not None:
-            wandb_run.finish()
+        wandb_client.finish()
         if distributed and dist.is_initialized():
             dist.destroy_process_group()
 
