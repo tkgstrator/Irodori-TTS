@@ -187,5 +187,9 @@ sample_generation:
   cfg_scale_text: 3.0
   cfg_scale_speaker: 5.0
   cfg_guidance_mode: independent
-  codec_device: cuda
+  # codec_device=cpu keeps the DACVAE off the training GPU during sample
+  # synthesis. On a 12GB card the train step + a transient codec load
+  # competes hard at the 200-step / on_best_val sample boundary; using
+  # CPU costs a few extra seconds per sample but removes that VRAM spike.
+  codec_device: cpu
   prompts: []
