@@ -5,7 +5,7 @@ base_hf_filename: model.safetensors
 model_device: cuda
 codec_device: cuda
 model_precision: bf16
-codec_precision: fp32
+codec_precision: bf16
 codec_repo: Aratako/Semantic-DACVAE-Japanese-32dim
 codec_deterministic_encode: true
 codec_deterministic_decode: true
