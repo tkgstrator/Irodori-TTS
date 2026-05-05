@@ -69,6 +69,49 @@ uv run --no-sync python prepare_manifest.py \
 
 ローカルで wav + 書き起こしまで済ませたい場合は、前段として `tts-preprocess` スキル（`scripts/preprocess/`）で `data/<speaker>/{wavs/, metadata.jsonl}` を作り、それを HF repo に push してから上記コマンドを回すのが定番ルートです。
 
+### 外部 HF parquet からの取り込み（`rebuild_speaker_dataset.py`）
+
+「**多話者の HF parquet dataset から 1 話者だけ抜き出して `data/<speaker>/{wavs/, metadata.jsonl}` を作りたい**」ケース向けの単一エントリです。`tts-preprocess` の前段として使い、出力をそのまま `prepare_manifest.py` に渡せます。
+
+#### 期待する parquet スキーマ
+
+`scripts/dataset/rebuild_speaker_dataset.py` は `huggingface_hub.HfApi` で repo 直下を走査し、`--data-files` の glob にマッチした parquet シャードを 1 本ずつ pull して読みます。各行に以下のカラムを要求します:
+
+| column          | type                              | description                                                              |
+|-----------------|-----------------------------------|--------------------------------------------------------------------------|
+| `speaker`       | str                               | 話者識別子。`--speaker` と完全一致する行だけ採用                         |
+| `audio`         | struct `{ bytes: binary, ... }`   | 音声バイト列。`bytes` が WAV (RIFF) ヘッダ付きならそのまま、PCM16 raw なら `44100Hz / mono / 16bit` として WAV ヘッダを被せて扱う |
+| `transcription` | str                               | 書き起こし。空文字 / whitespace のみは破棄                               |
+
+HF `datasets` 標準の `Audio()` カラムが decode 前に持つ `{bytes, path}` 形式と互換です（`path` は使いません）。サンプリングレートが 44100Hz でない場合や stereo は、現行の raw 読み出しパスでは正しく扱えないので、parquet に格納する前に揃えておく必要があります。
+
+#### 使い方
+
+```bash
+PYTHONPATH=. uv run python scripts/dataset/rebuild_speaker_dataset.py \
+  --repo-id      ultemica/genshin-impact-voices \
+  --data-files   'data/ja/train-*.parquet' \
+  --speaker      '神里绫华' \
+  --output-dir   data/ayaka \
+  --min-seconds  1.5 \
+  --max-seconds  30.0 \
+  --silence-db   -40 \
+  --normalize-lufs -23
+```
+
+各行を 1 パスで処理します:
+
+1. parquet 行から `(audio bytes, transcription)` を取り出す
+2. 一時 wav に書き出し → ffmpeg で前後の無音除去 + LUFS ラウドネス正規化（48000Hz / mono / pcm_s16le に統一）
+3. ffprobe で長さを測り、`[--min-seconds, --max-seconds]` 外なら破棄
+4. 採用行に **連番のファイル名** (`wavs/000000.wav`, `000001.wav`, ...) を振り、同じイテレーションで `metadata.jsonl` の対応行も書く
+
+`metadata.jsonl` は `{audio, text, duration}` 3 キーの JSONL になります。
+
+> **なぜ 1 パスで書くか**: 旧フロー (`extract_hf_speaker.py` → `preprocess_audio.py`) は最後に `preprocess_audio` が「生き残った順」で wav を `f"{seq:05d}.ogg"` に renumber する一方、`metadata.jsonl` のテキスト順を更新しないため、後段で `metadata.jsonl` と `wavs/<i>.wav` を **list 位置 / file_name で join するコードがテキストと音声をずらして読む** という事故が観測されました（cps が 0.4〜80 まで散る形で顕在化）。1 パス版はループ内で wav 採番とメタデータ書き出しを同期させるので、list 位置 join が常に正しくなります。
+
+`HF_TOKEN` を環境変数に入れておけば private repo も pull できます（`--token` で明示指定も可）。
+
 ### `config.yaml`（話者メタデータ）
 
 各話者ディレクトリに `config.yaml` を置いておくと、前処理（LLM クリーニング）と学習 config 生成（`scripts/train/make_speaker_config.py`）の両方がこれを読みます。ファイルはユーザーが自分で作成します — repo には含まれていません。
