@@ -75,6 +75,8 @@ by `--duration-scale`. If it does not, the runtime falls back to 30 seconds.
 | Parameter | Default | Notes |
 |-----------|---------|-------|
 | `--num-steps` | `40` | Number of Euler integration steps. Higher values are slower and can improve stability up to a point. |
+| `--t-schedule-mode` | `linear` | Timestep schedule for RF Euler sampling. Use `sway` to enable Sway Sampling. |
+| `--sway-coeff` | `-1.0` | Sway Sampling coefficient. Negative values allocate more schedule resolution to the noise side. |
 | `--num-candidates` | `1` | Number of candidates generated in one batched sampling pass. Higher values increase VRAM use. |
 | `--decode-mode` | `sequential` | `sequential` decodes candidates one by one and uses less VRAM. `batch` decodes all candidates together and can be faster. |
 | `--seed` | random | Sampling seed. Set it for reproducible results with the same checkpoint and parameters. |
@@ -84,6 +86,19 @@ by `--duration-scale`. If it does not, the runtime falls back to 30 seconds.
 `--num-steps` is usually the first quality/speed knob to try. For quick experiments,
 lower values can be acceptable; for final samples, start from the default before making
 other changes.
+
+For lower-latency experiments, try Sway Sampling with fewer steps:
+
+```bash
+uv run python infer.py \
+  --hf-checkpoint Aratako/Irodori-TTS-500M-v3 \
+  --text "今日はいい天気ですね。" \
+  --ref-wav path/to/reference.wav \
+  --num-steps 6 \
+  --t-schedule-mode sway \
+  --sway-coeff -1.0 \
+  --output-wav outputs/sample_sway.wav
+```
 
 ### Classifier-Free Guidance
 

@@ -58,6 +58,10 @@ def _on_codec_device_change(device: str) -> gr.Dropdown:
     return gr.Dropdown(choices=choices, value=choices[0])
 
 
+def _on_t_schedule_mode_change(mode: str) -> object:
+    return gr.update(interactive=str(mode).strip().lower() == "sway")
+
+
 def _parse_optional_float(raw: str | None, label: str) -> float | None:
     if raw is None:
         return None
@@ -173,6 +177,8 @@ def _run_generation(
     seed_raw: str,
     seconds_raw: str,
     duration_scale: float,
+    t_schedule_mode: str,
+    sway_coeff: float,
     cfg_guidance_mode: str,
     cfg_scale_text: float,
     cfg_scale_speaker: float,
@@ -226,13 +232,15 @@ def _run_generation(
     stdout_log(
         (
             "[gradio] request: model_device={} model_precision={} codec_device={} codec_precision={} "
-            "mode={} seconds={} duration_scale={} steps={} seed={} no_ref={} candidates={}"
+            "mode={} schedule={} sway_coeff={} seconds={} duration_scale={} steps={} seed={} no_ref={} candidates={}"
         ).format(
             model_device,
             model_precision,
             codec_device,
             codec_precision,
             cfg_guidance_mode,
+            t_schedule_mode,
+            sway_coeff,
             "auto" if manual_seconds is None else manual_seconds,
             duration_scale,
             num_steps,
@@ -271,6 +279,8 @@ def _run_generation(
             speaker_kv_scale=speaker_kv_scale,
             speaker_kv_min_t=speaker_kv_min_t,
             speaker_kv_max_layers=speaker_kv_max_layers,
+            t_schedule_mode=str(t_schedule_mode),
+            sway_coeff=float(sway_coeff),
             trim_tail=True,
         ),
         log_fn=stdout_log,
@@ -397,6 +407,21 @@ def build_ui() -> gr.Blocks:
                 )
 
             with gr.Row():
+                t_schedule_mode = gr.Dropdown(
+                    label="Time Schedule",
+                    choices=["linear", "sway"],
+                    value="linear",
+                )
+                sway_coeff = gr.Slider(
+                    label="Sway Coeff",
+                    minimum=-1.0,
+                    maximum=1.5,
+                    value=-1.0,
+                    step=0.1,
+                    interactive=False,
+                )
+
+            with gr.Row():
                 cfg_guidance_mode = gr.Dropdown(
                     label="CFG Guidance Mode",
                     choices=["independent", "joint", "alternating"],
@@ -474,6 +499,8 @@ def build_ui() -> gr.Blocks:
                 seed_raw,
                 seconds_raw,
                 duration_scale,
+                t_schedule_mode,
+                sway_coeff,
                 cfg_guidance_mode,
                 cfg_scale_text,
                 cfg_scale_speaker,
@@ -495,6 +522,9 @@ def build_ui() -> gr.Blocks:
         )
         codec_device.change(
             _on_codec_device_change, inputs=[codec_device], outputs=[codec_precision]
+        )
+        t_schedule_mode.change(
+            _on_t_schedule_mode_change, inputs=[t_schedule_mode], outputs=[sway_coeff]
         )
 
         load_model_btn.click(

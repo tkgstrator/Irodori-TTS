@@ -154,6 +154,22 @@ supported by the v3 codebase and still accept manual `--seconds`, but forcing a
 non-default duration can reduce audio quality; prefer the v3 base model for automatic
 or scaled duration control.
 
+### Sway Sampling
+
+For faster experimental inference, Sway Sampling can be combined with fewer Euler
+steps:
+
+```bash
+uv run python infer.py \
+  --hf-checkpoint Aratako/Irodori-TTS-500M-v3 \
+  --text "今日はいい天気ですね。" \
+  --ref-wav path/to/reference.wav \
+  --num-steps 6 \
+  --t-schedule-mode sway \
+  --sway-coeff -1.0 \
+  --output-wav outputs/sample_sway.wav
+```
+
 ### Additional Inference Notes
 
 For tuning guidance and detailed explanations of inference options, see the
