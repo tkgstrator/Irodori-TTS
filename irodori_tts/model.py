@@ -964,14 +964,17 @@ class DurationPredictor(nn.Module):
 
     def forward(
         self,
-        *,
         text_state: torch.Tensor,
+        *,
         text_mask: torch.Tensor,
         aux_features: torch.Tensor,
         speaker_state: torch.Tensor | None = None,
         speaker_mask: torch.Tensor | None = None,
         has_speaker: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        # text_state stays positional so peft's AuxiliaryTrainingWrapper (which
+        # requires forward(self, x, *args, **kwargs)) can wrap this module when
+        # `lora_modules_to_save` includes "duration_predictor".
         if text_state.ndim != 3 or text_state.shape[-1] != self.text_dim:
             raise ValueError(
                 f"text_state must have shape (B, S, {self.text_dim}), "
@@ -1470,7 +1473,7 @@ class TextToLatentRFDiT(nn.Module):
             )
 
         pred = self.duration_predictor(
-            text_state=text_state.detach(),
+            text_state.detach(),
             text_mask=text_mask,
             aux_features=duration_features,
             speaker_state=None if speaker_state is None else speaker_state.detach(),

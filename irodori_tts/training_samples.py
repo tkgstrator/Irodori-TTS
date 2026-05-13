@@ -97,7 +97,7 @@ def generate_training_samples(
                 ref_wav=prompt.ref_wav,
                 no_ref=bool(prompt.no_ref),
                 num_candidates=1,
-                seconds=float(prompt.seconds),
+                seconds=None if prompt.seconds is None else float(prompt.seconds),
                 num_steps=int(sample_cfg.num_steps),
                 cfg_scale_text=float(sample_cfg.cfg_scale_text),
                 cfg_scale_caption=float(sample_cfg.cfg_scale_caption),

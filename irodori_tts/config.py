@@ -221,7 +221,7 @@ class SamplePromptConfig:
     caption: str | None = None
     ref_wav: str | None = None
     no_ref: bool = True
-    seconds: float = 8.0
+    seconds: float | None = None
     seed: int | None = 42
 
 
