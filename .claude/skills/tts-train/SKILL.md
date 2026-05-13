@@ -9,7 +9,7 @@ Trains a speaker LoRA adapter for Irodori-TTS from a preprocessed dataset (the o
 
 1. **verify dataset** — ensure `metadata.jsonl` and audio files exist
 2. **encode latents** — run `prepare_manifest.py` to encode DACVAE latents and emit `train_manifest.jsonl`
-3. **write training config** — materialize a per-speaker YAML derived from `configs/train_500m_v2_lora.template.yaml`
+3. **write training config** — materialize a per-speaker YAML derived from `configs/train_500m_v2/lora/default.yaml`
 4. **launch training** — start `train.py` with resume support and checkpoint retention
 
 ## Invocation behavior
@@ -20,7 +20,7 @@ When the skill is invoked, **always start by asking the user** what to train. Ev
 2. **Speaker name** — short identifier used for output directories and run names (e.g. `ema`).
 3. **Base model checkpoint** — default `models/Irodori-TTS-500M-v2/model.safetensors`. Confirm it exists; otherwise ask whether to use HF (`Aratako/Irodori-TTS-500M-v2`) or a different path.
 4. **Output directory** — default `outputs/<speaker>_lora`.
-5. **Config overrides** — present these defaults (from `configs/train_500m_v2_lora.template.yaml`) and ask whether any should change:
+5. **Config overrides** — present these defaults (from `configs/train_500m_v2/lora/default.yaml`) and ask whether any should change:
    - `--max-steps 5000`
    - `--batch-size 8`
    - `--gradient-accumulation-steps 4`
@@ -49,7 +49,7 @@ This step is **GPU-bound** and can take several minutes for thousands of clips. 
 
 ### Step 3 — write training config
 
-Start from `configs/train_500m_v2_lora.template.yaml` and write a derived file `configs/train_500m_v2_<speaker>_lora.yaml` with any user-specified overrides (run name, max_steps, lora params, etc.). Do not modify the base config in place.
+Start from `configs/train_500m_v2/lora/default.yaml` and write a derived file `configs/train_500m_v2/lora/<speaker>.yaml` with any user-specified overrides (run name, max_steps, lora params, etc.). Do not modify the base config in place.
 
 ### Step 4 — launch training
 
@@ -57,7 +57,7 @@ Invoke `train.py` with flags matching the derived config:
 
 ```
 uv run python train.py \
-  --config configs/train_500m_v2_<speaker>_lora.yaml \
+  --config configs/train_500m_v2/lora/<speaker>.yaml \
   --manifest <dataset_dir>/train_manifest.jsonl \
   --latent-root <dataset_dir> \
   --output-dir outputs/<speaker>_lora \

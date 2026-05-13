@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Generate configs/train_500m_v2_<speaker>_lora.yaml from the base template.
+"""Generate configs/train_500m_v2/lora/<speaker>.yaml from the base template.
 
 Reads two inputs:
-  1. configs/train_500m_v2_lora.template.yaml  (shared LoRA template)
+  1. configs/train_500m_v2/lora/default.yaml  (shared LoRA template)
   2. data/<speaker>/config.yaml               (per-speaker config: name,
      cleaning hints, sample_texts for checkpoint A/B listening)
 
-Writes configs/train_500m_v2_<speaker>_lora.yaml, tuning:
+Writes configs/train_500m_v2/lora/<speaker>.yaml, tuning:
   - train.save_every / train.valid_every so the run emits ~10 checkpoints
     and ~30 val points regardless of dataset size
   - sample_generation.prompts from the per-speaker sample_texts
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-TEMPLATE = Path("configs/train_500m_v2_lora.template.yaml")
+TEMPLATE = Path("configs/train_500m_v2/lora/default.yaml")
 
 # Targets for how many ckpts / val points a run should emit. These drive
 # save_every / valid_every derivation below. Everything else (batch size,
@@ -96,7 +96,7 @@ def main() -> None:
     if not TEMPLATE.exists():
         raise SystemExit(f"template not found: {TEMPLATE}")
 
-    dst = Path(f"configs/train_500m_v2_{args.speaker}_lora.yaml")
+    dst = Path(f"configs/train_500m_v2/lora/{args.speaker}.yaml")
     if dst.exists() and not args.force:
         raise SystemExit(f"{dst} already exists (use --force to overwrite)")
 

@@ -263,7 +263,7 @@ HF_DATASET=<org>/irodori-tts-voices NUM_GPUS=8 \
 
 ## 5. ハイパラとスケジューラ
 
-デフォルトは `configs/train_500m_v2_lora.template.yaml`。主要値:
+デフォルトは `configs/train_500m_v2/lora/default.yaml`。主要値:
 
 | 項目                        | 値                                        |
 |-----------------------------|-------------------------------------------|
@@ -322,7 +322,7 @@ environment:
   LORA_ALPHA: 128
 ```
 
-環境変数で指定された値は config テンプレートより優先されます。一切指定しなければ `configs/train_500m_v2_lora.template.yaml` のデフォルトがそのまま使われます。
+環境変数で指定された値は config テンプレートより優先されます。一切指定しなければ `configs/train_500m_v2/lora/default.yaml` のデフォルトがそのまま使われます。
 
 ### 早期停止 (Early Stopping)
 

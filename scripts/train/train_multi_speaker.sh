@@ -156,7 +156,7 @@ run_queue() {
   local speakers=("$@")
   local rc_any=0
   for speaker in "${speakers[@]}"; do
-    local cfg="configs/train_500m_v2_${speaker}_lora.yaml"
+    local cfg="configs/train_500m_v2/lora/${speaker}.yaml"
     local manifest="data/${speaker}/manifest.jsonl"
     local outdir="outputs/${speaker}_lora"
 
