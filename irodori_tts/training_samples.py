@@ -36,7 +36,6 @@ def load_codec_for_sampling(
         dtype=codec_dtype,
         deterministic_encode=True,
         deterministic_decode=True,
-        enable_watermark=False,
     )
     if codec.latent_dim != expected_latent_dim:
         raise ValueError(
