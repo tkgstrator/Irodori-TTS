@@ -39,10 +39,14 @@ RUN \
   apt-get install -y --no-install-recommends \
     python3.12 \
     python3.12-venv \
+    python3.12-dev \
     ffmpeg \
     ca-certificates \
     curl \
-    git && \
+    git \
+    build-essential \
+    cmake \
+    pkg-config && \
   ln -sf /usr/bin/python3.12 /usr/local/bin/python3 && \
   ln -sf /usr/bin/python3.12 /usr/local/bin/python
 
