@@ -618,7 +618,8 @@ class TextEncoder(nn.Module):
     def _rope_freqs(self, seq_len: int, device: torch.device) -> torch.Tensor:
         cache = self._freqs_cis_cache
         if cache.device != device or cache.shape[0] < seq_len:
-            cache = precompute_freqs_cis(self.head_dim, seq_len).to(device)
+            with torch.inference_mode(False):
+                cache = precompute_freqs_cis(self.head_dim, seq_len).to(device)
             self._freqs_cis_cache = cache
         return cache[:seq_len]
 
@@ -661,7 +662,8 @@ class ReferenceLatentEncoder(nn.Module):
     def _rope_freqs(self, seq_len: int, device: torch.device) -> torch.Tensor:
         cache = self._freqs_cis_cache
         if cache.device != device or cache.shape[0] < seq_len:
-            cache = precompute_freqs_cis(self.head_dim, seq_len).to(device)
+            with torch.inference_mode(False):
+                cache = precompute_freqs_cis(self.head_dim, seq_len).to(device)
             self._freqs_cis_cache = cache
         return cache[:seq_len]
 
@@ -1188,7 +1190,8 @@ class TextToLatentRFDiT(nn.Module):
     def _rope_freqs(self, seq_len: int, device: torch.device) -> torch.Tensor:
         cache = self._freqs_cis_cache
         if cache.device != device or cache.shape[0] < seq_len:
-            cache = precompute_freqs_cis(self.head_dim, seq_len).to(device)
+            with torch.inference_mode(False):
+                cache = precompute_freqs_cis(self.head_dim, seq_len).to(device)
             self._freqs_cis_cache = cache
         return cache[:seq_len]
 
