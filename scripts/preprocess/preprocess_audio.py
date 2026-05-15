@@ -23,7 +23,8 @@ def process_one(src: Path, dst: Path, silence_db: float, lufs: float) -> float |
     af = (
         f"silenceremove=1:0:{silence_db}dB,"
         f"areverse,silenceremove=1:0:{silence_db}dB,areverse,"
-        f"loudnorm=I={lufs}:TP=-1.5:LRA=11"
+        f"loudnorm=I={lufs}:TP=-1.5:LRA=11,"
+        f"aresample=44100"
     )
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
@@ -71,7 +72,7 @@ def main() -> None:
     print(f"found {len(files)} source files in {src}")
 
     jobs = [
-        (i, str(f), str(tmp / f.name), args.silence_db, args.normalize_lufs)
+        (i, str(f), str(tmp / (f.stem + ".ogg")), args.silence_db, args.normalize_lufs)
         for i, f in enumerate(files)
     ]
 
