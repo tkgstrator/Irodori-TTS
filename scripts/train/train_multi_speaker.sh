@@ -1,49 +1,82 @@
 #!/usr/bin/env bash
-# Train multiple speaker LoRA adapters in parallel, one per GPU.
+# Train multiple v3 speaker LoRA adapters in parallel, one per GPU.
 #
 # Usage:
 #   scripts/train/train_multi_speaker.sh [speaker1 speaker2 ...]
 #     If no args, reads SPEAKERS from env or uses DEFAULT_SPEAKERS below.
 #
+# v3 flow: a single shared config (configs/train_500m_v3/lora/default.yaml)
+# is used for every speaker. Per-speaker sample_generation prompts come from
+# data/<speaker>/config.yaml:sample_texts (or, if absent, train.py auto-picks
+# length-balanced samples from the manifest). No per-speaker yaml is needed.
+#
 # Each speaker must have:
-#   - configs/train_500m_v2_<speaker>_lora.yaml
-#   - data/<speaker>/manifest.jsonl (+ latents/)
+#   - data/<speaker>/manifest.jsonl
+#   - data/<speaker>/latents/
 #
 # Per-speaker run is pinned to a single GPU via CUDA_VISIBLE_DEVICES.
 # stdout/stderr go to outputs/<speaker>_lora/train.log.
 # Waits for all runs, then exits non-zero if any failed.
+#
+# Environment knobs:
+#   GPUS                          - explicit GPU list, e.g. "0 3 4 5"
+#                                   (overrides auto-detection)
+#   FREE_GPU_MEM_THRESHOLD_MIB    - auto-detect threshold; GPUs with
+#                                   memory.used >= this are skipped.
+#                                   Default: 1000
+#   BASE_CKPT                     - base v3 checkpoint path. Default:
+#                                   models/Irodori-TTS-500M-v3/model.safetensors
+#   NO_RESUME                     - "true" to ignore existing checkpoints
+#   EXTRA_TRAIN_ARGS              - extra flags appended verbatim to train.py
 
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
+
+CONFIG="${CONFIG:-configs/train_500m_v3/lora/default.yaml}"
+BASE_CKPT="${BASE_CKPT:-models/Irodori-TTS-500M-v3/model.safetensors}"
 
 DEFAULT_SPEAKERS=(
-  margo leia coco alisa hanna meruru nanoka miria noah yuki anan
+  ema hiro sherry margo leia coco alisa hanna meruru
+  nanoka miria noah yuki anan cherry
 )
 
 if [ $# -gt 0 ]; then
   SPEAKERS=("$@")
 elif [ -n "${SPEAKERS:-}" ]; then
   # shellcheck disable=SC2206
-  SPEAKERS=(${SPEAKERS})
+  SPEAKERS=(${SPEAKERS//,/ })
 else
   SPEAKERS=("${DEFAULT_SPEAKERS[@]}")
 fi
 
-# GPU detection (uses nvidia-smi). Override with GPUS="0 1 2 3".
-if [ -z "${GPUS:-}" ]; then
-  if command -v nvidia-smi >/dev/null 2>&1; then
-    mapfile -t GPU_LIST < <(nvidia-smi --query-gpu=index --format=csv,noheader | awk '{print $1}')
-  else
-    GPU_LIST=(0)
-  fi
-else
+# GPU selection: GPUS env overrides auto-detection. Otherwise, query nvidia-smi
+# and keep GPUs whose memory.used is below FREE_GPU_MEM_THRESHOLD_MIB (default
+# 1000). This skips GPUs already running other services so we only land on
+# idle ones.
+: "${FREE_GPU_MEM_THRESHOLD_MIB:=1000}"
+if [ -n "${GPUS:-}" ]; then
   # shellcheck disable=SC2206
   GPU_LIST=(${GPUS})
+elif command -v nvidia-smi >/dev/null 2>&1; then
+  mapfile -t GPU_LIST < <(
+    nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits \
+      | awk -F', *' -v thr="${FREE_GPU_MEM_THRESHOLD_MIB}" '$2+0 < thr {print $1}'
+  )
+  if [ "${#GPU_LIST[@]}" -eq 0 ]; then
+    echo "ERROR: no GPU has memory.used < ${FREE_GPU_MEM_THRESHOLD_MIB} MiB." >&2
+    echo "       Set GPUS=... to override, or lower FREE_GPU_MEM_THRESHOLD_MIB." >&2
+    nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv >&2
+    exit 1
+  fi
+else
+  GPU_LIST=(0)
 fi
 
-BASE_CKPT="${BASE_CKPT:-models/Irodori-TTS-500M-v2/model.safetensors}"
-
+if [ ! -f "${CONFIG}" ]; then
+  echo "ERROR: config not found: ${CONFIG}" >&2
+  exit 1
+fi
 if [ ! -f "${BASE_CKPT}" ]; then
   echo "ERROR: base checkpoint not found: ${BASE_CKPT}" >&2
   exit 1
@@ -56,19 +89,17 @@ if [ -f .env ]; then
   set +a
 fi
 
-echo "=== multi-speaker train launch ==="
-echo "GPUs: ${GPU_LIST[*]}"
-echo "Speakers: ${SPEAKERS[*]}"
+echo "=== multi-speaker v3 LoRA train ==="
+echo "config:    ${CONFIG}"
+echo "base_ckpt: ${BASE_CKPT}"
+echo "GPUs:      ${GPU_LIST[*]}"
+echo "speakers:  ${SPEAKERS[*]}"
 echo
 
 fail_count=0
 
-# Partition speakers into per-GPU queues using LPT (Longest Processing Time
-# first) greedy balancing on manifest line counts. This keeps total training
-# work per GPU roughly equal without needing an LP solver — LPT is a simple
-# 4/3-approximation to the NP-hard multiway number partitioning problem.
-# Falls back to size 0 for any missing manifest (error surfaces later in
-# run_queue). At most one training job per GPU at a time.
+# LPT (Longest Processing Time first) greedy partition: keep total manifest
+# rows roughly equal across GPUs without an LP solver.
 n_gpu=${#GPU_LIST[@]}
 declare -a QUEUES
 declare -a GPU_LOAD
@@ -83,12 +114,11 @@ for speaker in "${SPEAKERS[@]}"; do
   if [ -f "${manifest}" ]; then
     SPEAKER_COUNT[$speaker]=$(wc -l < "${manifest}" | tr -d ' ')
   else
-    echo "[${speaker}] WARN: missing manifest ${manifest}, assuming size 0 for balancing" >&2
+    echo "[${speaker}] WARN: missing manifest ${manifest}, assuming size 0" >&2
     SPEAKER_COUNT[$speaker]=0
   fi
 done
 
-# Sort speakers by count desc (LPT)
 mapfile -t SORTED_SPEAKERS < <(
   for s in "${SPEAKERS[@]}"; do
     printf '%d\t%s\n' "${SPEAKER_COUNT[$s]}" "$s"
@@ -131,9 +161,6 @@ find_latest_checkpoint() {
     step="${name#checkpoint_}"
     step="${step%%[!0-9]*}"
     [ -z "${step}" ] && continue
-    # Skip checkpoints whose recorded manifest size does not match the current
-    # manifest — training data has changed, so optimizer/scheduler state is
-    # stale.
     if [ -n "${manifest_size}" ] && [ -f "${path}/manifest_size.txt" ]; then
       local stored
       stored="$(tr -d '[:space:]' < "${path}/manifest_size.txt")"
@@ -156,15 +183,9 @@ run_queue() {
   local speakers=("$@")
   local rc_any=0
   for speaker in "${speakers[@]}"; do
-    local cfg="configs/train_500m_v2/lora/${speaker}.yaml"
     local manifest="data/${speaker}/manifest.jsonl"
     local outdir="outputs/${speaker}_lora"
 
-    if [ ! -f "${cfg}" ]; then
-      echo "[${speaker}] ERROR: missing config ${cfg}" >&2
-      rc_any=1
-      continue
-    fi
     if [ ! -f "${manifest}" ]; then
       echo "[${speaker}] ERROR: missing manifest ${manifest}" >&2
       rc_any=1
@@ -173,7 +194,7 @@ run_queue() {
 
     mkdir -p "${outdir}"
     local log="${outdir}/train.log"
-    echo "=== launch: $(date +'%Y-%m-%d %H:%M') gpu=${gpu} ===" >> "${log}"
+    echo "=== launch: $(date -u +'%Y-%m-%dT%H:%M:%SZ') gpu=${gpu} ===" >> "${log}"
     echo "[${speaker}] -> GPU ${gpu}, log=${log}"
 
     local manifest_size
@@ -198,10 +219,10 @@ run_queue() {
     local extra=(${EXTRA_TRAIN_ARGS:-})
     CUDA_VISIBLE_DEVICES="${gpu}" \
     uv run --no-sync python train.py \
-      --config "${cfg}" \
+      --config "${CONFIG}" \
       --manifest "${manifest}" \
       --output-dir "${outdir}" \
-      --wandb-run-name "${speaker}_lora" \
+      --wandb-run-name "${speaker}_lora_v3" \
       "${init_args[@]}" \
       "${extra[@]}" \
       >> "${log}" 2>&1

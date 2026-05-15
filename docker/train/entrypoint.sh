@@ -28,9 +28,9 @@
 #                        filters which speakers to train (default: every
 #                        speaker in /app/data that has a manifest.jsonl).
 #   BASE_MODEL_REPO    - HF repo for the base checkpoint.
-#                        Default: Aratako/Irodori-TTS-500M-v2
+#                        Default: Aratako/Irodori-TTS-500M-v3
 #   BASE_CKPT          - Path to base checkpoint inside the container.
-#                        Default: /app/models/Irodori-TTS-500M-v2/model.safetensors
+#                        Default: /app/models/Irodori-TTS-500M-v3/model.safetensors
 #   GPUS               - Space-separated GPU indices for train_multi_speaker.sh.
 #                        Takes precedence over NUM_GPUS. Example: "0 1 2 3"
 #   NUM_GPUS           - Integer number of GPUs to use. If set (and GPUS unset),
@@ -44,7 +44,7 @@
 #                        further training).
 #
 # Hyperparameter overrides (all optional — leave unset to use the template
-# configs/train_500m_v2/lora/default.yaml defaults). Each one, if set, is
+# configs/train_500m_v3/lora/default.yaml defaults). Each one, if set, is
 # passed to train.py as a CLI flag and therefore overrides the config value.
 #
 #   MAX_EPOCHS                    -> --max-epochs
@@ -72,8 +72,8 @@ cd /app
 
 log() { printf '[entrypoint] %s\n' "$*"; }
 
-: "${BASE_MODEL_REPO:=Aratako/Irodori-TTS-500M-v2}"
-: "${BASE_CKPT:=/app/models/Irodori-TTS-500M-v2/model.safetensors}"
+: "${BASE_MODEL_REPO:=Aratako/Irodori-TTS-500M-v3}"
+: "${BASE_CKPT:=/app/models/Irodori-TTS-500M-v3/model.safetensors}"
 
 # -----------------------------------------------------------------------------
 # 0. Ensure Python venv is in place. The image ships only system deps and
@@ -151,8 +151,12 @@ fi
 log "training speakers: ${TRAIN_SPEAKERS[*]}"
 
 # -----------------------------------------------------------------------------
-# 4. Validate per-speaker data layout and generate config if missing.
+# 4. Validate per-speaker data layout.
 # -----------------------------------------------------------------------------
+# v3 flow: a single shared config (configs/train_500m_v3/lora/default.yaml) is
+# used for every speaker. Per-speaker sample prompts come from
+# data/<speaker>/config.yaml:sample_texts, or are auto-picked from the manifest
+# by train.py when that config is absent. No per-speaker yaml is generated.
 for s in "${TRAIN_SPEAKERS[@]}"; do
   manifest="data/${s}/manifest.jsonl"
   latents="data/${s}/latents"
@@ -164,12 +168,6 @@ for s in "${TRAIN_SPEAKERS[@]}"; do
     echo "ERROR: ${latents}/ not found" >&2
     exit 1
   fi
-
-  cfg="configs/train_500m_v2_${s}_lora.yaml"
-  # Always regenerate so save_every/valid_every are re-derived from the
-  # current manifest (target: ~10 checkpoints per run).
-  log "generating ${cfg}"
-  uv run --no-sync python scripts/train/make_speaker_config.py "${s}" --force
 done
 
 # -----------------------------------------------------------------------------

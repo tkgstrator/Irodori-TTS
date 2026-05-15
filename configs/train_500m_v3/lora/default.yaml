@@ -59,14 +59,19 @@ train:
   log_every: 100
   save_every: 1000
   checkpoint_best_n: 5
-  wandb_enabled: false
-  wandb_project:
-  wandb_entity:
+  wandb_enabled: true
+  wandb_project: ${WANDB_PROJECT:irodori-tts-v3}
+  wandb_entity: ${WANDB_ENTITY}
   wandb_run_name:
-  wandb_mode: online
+  wandb_mode: ${WANDB_MODE:online}
   ddp_find_unused_parameters: false
   valid_ratio: 0.0005
-  valid_every: 1000
+  valid_every: 200
+  early_stop_enabled: true
+  early_stop_min_step: 1000
+  early_stop_patience: 10
+  early_stop_min_delta: 0.001
+  early_stop_regression_ratio: 0.10
   lora_enabled: true
   lora_r: 16
   lora_alpha: 32
@@ -75,3 +80,18 @@ train:
   lora_target_modules: diffusion_attn
   lora_modules_to_save: auto
   seed: 0
+
+
+# Sample generation block — `prompts` is intentionally omitted here.
+# train.py fills it from data/<speaker>/config.yaml:sample_texts when
+# the per-speaker config provides any. Add `prompts:` here only if you
+# want a literal override that ignores the speaker config.
+sample_generation:
+  enabled: true
+  every: 1020
+  on_best_val: true
+  num_steps: 40
+  cfg_scale_text: 3.0
+  cfg_scale_speaker: 5.0
+  cfg_guidance_mode: independent
+  codec_device: cpu

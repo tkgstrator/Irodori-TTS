@@ -72,22 +72,27 @@ lora_dir: models/LoRA
 uv run python scripts/lora/export_lora_to_safetensors.py \
   --input  outputs/<speaker>_lora/checkpoint_best_val_loss_0002400_0.312100 \
   --output models/LoRA/<speaker>.safetensors \
-  --name   "<表示名>" \
   --defaults '{"num_steps": 40, "cfg_scale_text": 3.0, "cfg_scale_speaker": 5.0}'
 ```
+
+`name` は `data/<speaker>/config.yaml` の `speaker.label` を正として自動で入ります。`--name` は `speaker.label` / `speaker.name` が無い古いデータ向けの fallback です。canonical なラベルがある場合は `--name` を渡してもそちらが優先されます。
 
 書き出される `__metadata__` (str→str):
 
 | key               | 用途 |
 |-------------------|------|
-| `format`          | `irodori-tts-lora/v1` 固定 |
-| `name`            | サーバ / デモ UI に表示される名前 |
+| `format`          | `irodori-tts-lora/v1` 固定。LoRA 単一ファイル export の schema version で、ベースモデル世代（v2 / v3）とは別物 |
+| `name`            | サーバ / デモ UI に表示される名前。通常は `speaker.label` と同じ |
 | `uuid`            | `speaker_id`。`--uuid` 未指定時は出力ファイル名から UUIDv5 で決定論的に生成 |
 | `defaults`        | JSON。`num_steps` / `cfg_scale_text` / `cfg_scale_speaker` / `speaker_kv_scale` / `truncation_factor` の既定値 |
 | `adapter_config`  | JSON。PEFT の `adapter_config.json`（rank / target modules 等） |
 | `base_init`       | JSON。学習時の `base_init.json` |
 | `model_config`    | JSON。学習時の `config.json`（モデル / train config dump） |
 | `manifest_size`   | 学習データの件数 |
+| `speaker.label`   | 任意。`data/<speaker>/config.yaml` の `speaker.label` |
+| `speaker.cv`      | 任意。`data/<speaker>/config.yaml` の `speaker.cv` |
+| `category.id`     | 任意。`data/<speaker>/config.yaml` の `category.id` |
+| `category.label`  | 任意。`data/<speaker>/config.yaml` の `category.label` |
 
 さらに学習時に `train.py` が埋め込むフラットキー (`uuid` / `model_name` / `speaker` / `base_model` / `step` / `epoch` / `val_loss` / `created_at` / `lora_r` / `lora_alpha` / `lora_dropout` / `lora_target_modules`) もそのまま持ち回されます。export 側の `uuid` は別 namespace で再生成されるので、学習時 UUID とサーバ UUID は別物です（識別文字列が欲しければ `safetensors.safe_open(...).metadata()` で両方取れます）。
 
@@ -320,7 +325,7 @@ curl -s http://localhost:8765/synth/vds \
 
 1. LoRA を学習して `outputs/<speaker>_lora/checkpoint_best_val_loss_*` を得る（`docs/TRAINING.md` 参照）。
 2. `samples/` の per-step wav を聴いて採用する checkpoint を決める。
-3. `scripts/lora/export_lora_to_safetensors.py` で `.safetensors` にエクスポートし、`--name` / `--defaults` を埋め込む。
+3. `scripts/lora/export_lora_to_safetensors.py` で `.safetensors` にエクスポートし、`speaker.label` 由来の `name` と `--defaults` を埋め込む。
 4. `.safetensors` を `models/LoRA/` に置く。
 5. サーバを再起動（`docker compose restart tts` など）。
 6. `GET /speakers` で新 UUID を確認、`POST /synth` で動作確認。

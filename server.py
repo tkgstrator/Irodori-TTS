@@ -68,6 +68,15 @@ _LORA_UUID_NAMESPACE = uuid_lib.UUID("8e6d8a0e-5a52-4a1e-8c8d-4c3e2f6a1b9f")
 logger = logging.getLogger("irodori_tts.server")
 
 
+def _resolve_lora_display_name(meta: dict[str, str], fallback: str) -> str:
+    for key in ("speaker.label", "name", "speaker"):
+        value = meta.get(key)
+        text = str(value).strip() if value is not None else ""
+        if text:
+            return text
+    return fallback
+
+
 @dataclass
 class SpeakerSpec:
     uuid: str
@@ -117,7 +126,7 @@ def _discover_lora_dir(lora_dir: Path) -> list[SpeakerSpec]:
         except Exception as exc:
             logger.warning("failed to read metadata from %s: %s", entry, exc)
             continue
-        name = meta.get("name") or entry.stem
+        name = _resolve_lora_display_name(meta, entry.stem)
         speaker_uuid = meta.get("uuid") or str(uuid_lib.uuid5(_LORA_UUID_NAMESPACE, entry.stem))
         defaults: dict[str, Any] = {}
         raw_defaults = meta.get("defaults")
