@@ -45,7 +45,6 @@ from irodori_tts.vds import (
 from irodori_tts.vds.shortcodes import expand_shortcodes
 from irodori_tts.vds.parser import ParseError
 
-FIXED_SECONDS = 30.0
 _FADE_MS = 50
 
 
@@ -523,7 +522,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             ref_ensure_max=True,
             num_candidates=1,
             decode_mode="sequential",
-            seconds=FIXED_SECONDS,
+            seconds=None,
             max_ref_seconds=30.0,
             max_text_len=None,
             max_caption_len=None,
@@ -638,7 +637,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             ref_ensure_max=True,
             num_candidates=1,
             decode_mode="sequential",
-            seconds=FIXED_SECONDS,
+            seconds=None,
             max_ref_seconds=30.0,
             max_text_len=None,
             max_caption_len=None,
@@ -796,7 +795,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             ref_ensure_max=True,
             num_candidates=1,
             decode_mode="sequential",
-            seconds=FIXED_SECONDS,
+            seconds=None,
             max_ref_seconds=30.0,
             max_text_len=None,
             max_caption_len=None,
