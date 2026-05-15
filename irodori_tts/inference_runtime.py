@@ -660,7 +660,6 @@ class InferenceRuntime:
             dtype=codec_dtype,
             deterministic_encode=bool(key.codec_deterministic_encode),
             deterministic_decode=bool(key.codec_deterministic_decode),
-            enable_watermark=bool(key.enable_watermark),
         )
         if model_cfg.latent_dim != codec.latent_dim:
             raise ValueError(

@@ -9,7 +9,6 @@ codec_precision: bf16
 codec_repo: Aratako/Semantic-DACVAE-Japanese-32dim
 codec_deterministic_encode: true
 codec_deterministic_decode: true
-enable_watermark: false
 
 # VoiceDesign (caption) runtime — loaded alongside the LoRA base model.
 # If both caption_checkpoint and caption_hf_repo are omitted, caption

@@ -97,7 +97,6 @@ class ServerConfig:
     codec_repo: str
     codec_deterministic_encode: bool
     codec_deterministic_decode: bool
-    enable_watermark: bool
     caption_checkpoint: str | None
     caption_hf_repo: str | None
     caption_hf_filename: str
@@ -182,7 +181,6 @@ def load_config(path: Path) -> ServerConfig:
         codec_repo=str(raw.get("codec_repo", "Aratako/Semantic-DACVAE-Japanese-32dim")),
         codec_deterministic_encode=bool(raw.get("codec_deterministic_encode", True)),
         codec_deterministic_decode=bool(raw.get("codec_deterministic_decode", True)),
-        enable_watermark=bool(raw.get("enable_watermark", False)),
         caption_checkpoint=(str(raw["caption_checkpoint"]) if raw.get("caption_checkpoint") else None),
         caption_hf_repo=(str(raw["caption_hf_repo"]) if raw.get("caption_hf_repo") else None),
         caption_hf_filename=str(raw.get("caption_hf_filename", "model.safetensors")),
@@ -252,7 +250,6 @@ class RuntimeRegistry:
             codec_precision=self.cfg.codec_precision,
             codec_deterministic_encode=self.cfg.codec_deterministic_encode,
             codec_deterministic_decode=self.cfg.codec_deterministic_decode,
-            enable_watermark=self.cfg.enable_watermark,
             compile_model=False,
             compile_dynamic=False,
         )
