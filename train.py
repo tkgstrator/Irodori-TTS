@@ -2270,6 +2270,22 @@ def main() -> None:
     from irodori_tts.wandb_client import WandbClient
     from irodori_tts.wandb_client import from_env as _wandb_cfg_from_env
 
+    # Resolve the persistent run UUID before wandb.init so the same wandb run
+    # is reused when training resumes from a checkpoint. The uuid is stored on
+    # the prior adapter_model.safetensors metadata (see _build_lora_safetensors_metadata).
+    run_uuid: str | None = None
+    if args.resume is not None:
+        try:
+            from safetensors import safe_open as _safe_open_for_uuid
+            _adapter_path = Path(args.resume) / "adapter_model.safetensors"
+            if _adapter_path.is_file():
+                with _safe_open_for_uuid(str(_adapter_path), framework="pt", device="cpu") as _f:
+                    run_uuid = (_f.metadata() or {}).get("uuid")
+        except Exception:
+            run_uuid = None
+    if not run_uuid:
+        run_uuid = str(_uuid.uuid4())
+
     wandb_client = WandbClient(
         _wandb_cfg_from_env(
             enabled=train_cfg.wandb_enabled and is_main_process,
@@ -2277,6 +2293,8 @@ def main() -> None:
             entity=train_cfg.wandb_entity,
             run_name=train_cfg.wandb_run_name,
             mode=train_cfg.wandb_mode or "online",
+            run_id=run_uuid,
+            resume="allow",
         ),
         config={
             "model": asdict(model_cfg),
@@ -2466,18 +2484,6 @@ def main() -> None:
 
     speaker_name = _resolve_speaker_id(train_cfg.manifest_path)
     run_name = wandb_client.name or train_cfg.wandb_run_name or output_dir.name
-    run_uuid: str | None = None
-    if args.resume is not None:
-        try:
-            from safetensors import safe_open
-            existing_adapter = Path(args.resume) / "adapter_model.safetensors"
-            if existing_adapter.is_file():
-                with safe_open(str(existing_adapter), framework="pt", device="cpu") as _f:
-                    run_uuid = (_f.metadata() or {}).get("uuid")
-        except Exception:
-            run_uuid = None
-    if not run_uuid:
-        run_uuid = str(_uuid.uuid4())
     if is_main_process:
         print(f"[run identity] uuid={run_uuid} name={run_name} speaker={speaker_name}")
     if train_cfg.max_epochs is not None:

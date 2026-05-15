@@ -33,6 +33,8 @@ class WandbConfig:
     api_key: str | None = None
     cf_access_client_id: str | None = None
     cf_access_client_secret: str | None = None
+    run_id: str | None = None
+    resume: str | None = None
 
 
 class WandbClient:
@@ -80,6 +82,8 @@ class WandbClient:
             dir=str(output_dir) if output_dir is not None else None,
             config=config or {},
             settings=settings,
+            id=cfg.run_id or None,
+            resume=cfg.resume or None,
         )
 
     @property
@@ -139,11 +143,14 @@ def from_env(
     entity: str | None,
     run_name: str | None,
     mode: str,
+    run_id: str | None = None,
+    resume: str | None = None,
 ) -> WandbConfig:
     """Build a WandbConfig by reading credentials/URL from the environment.
 
     Centralizes the env var names so callers do not sprinkle `os.environ.get`
-    throughout the codebase.
+    throughout the codebase. `run_id` / `resume` (e.g. "allow") let callers
+    keep a stable identifier across restarts so wandb appends to the same run.
     """
     return WandbConfig(
         enabled=enabled,
@@ -155,4 +162,6 @@ def from_env(
         api_key=os.environ.get("WANDB_API_KEY"),
         cf_access_client_id=os.environ.get("CF_ACCESS_CLIENT_ID"),
         cf_access_client_secret=os.environ.get("CF_ACCESS_CLIENT_SECRET"),
+        run_id=run_id,
+        resume=resume,
     )
