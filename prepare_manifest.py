@@ -110,16 +110,18 @@ def parse_optional_float(value: str) -> float | None:
     return out
 
 
-def _parse_data_files(items: list[str] | None) -> Any:
+def _parse_data_files(items: Any) -> Any:
     if items is None:
         return None
 
     flat_items: list[str] = []
     for item in items:
-        item = item.strip()
-        if not item:
-            continue
-        flat_items.append(item)
+        raw_items = item if isinstance(item, (list, tuple)) else [item]
+        for raw_item in raw_items:
+            item_str = str(raw_item).strip()
+            if not item_str:
+                continue
+            flat_items.append(item_str)
 
     if not flat_items:
         return None
@@ -165,6 +167,57 @@ def _parse_speaker_columns(items: list[str] | None) -> list[str]:
             if column:
                 out.append(column)
     return out
+
+
+def _iter_local_data_files(data_files: Any) -> list[Path]:
+    if data_files is None:
+        return []
+    if isinstance(data_files, str):
+        return [Path(data_files).expanduser().resolve()]
+    if isinstance(data_files, list):
+        out: list[Path] = []
+        for item in data_files:
+            if isinstance(item, str):
+                out.append(Path(item).expanduser().resolve())
+        return out
+    if isinstance(data_files, dict):
+        out: list[Path] = []
+        for value in data_files.values():
+            if isinstance(value, str):
+                out.append(Path(value).expanduser().resolve())
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str):
+                        out.append(Path(item).expanduser().resolve())
+        return out
+    return []
+
+
+def _infer_audio_root_from_data_files(data_files: Any) -> Path | None:
+    paths = _iter_local_data_files(data_files)
+    if len(paths) != 1:
+        return None
+    metadata_path = paths[0]
+    if metadata_path.name != "metadata.jsonl":
+        return None
+    audio_root = metadata_path.parent / "wavs"
+    if not audio_root.is_dir():
+        return None
+    return audio_root
+
+
+def _materialize_audio_column_from_file_name(
+    ds: Any,
+    *,
+    audio_column: str,
+    file_name_column: str,
+    audio_root: Path,
+) -> Any:
+    def attach_audio_path(example: dict[str, Any]) -> dict[str, str]:
+        file_name = _coerce_text(example.get(file_name_column, "")).strip()
+        return {audio_column: str((audio_root / file_name).as_posix())}
+
+    return ds.map(attach_audio_path)
 
 
 @dataclass
@@ -494,18 +547,34 @@ def _run_worker(
     latent_dir = Path(args.latent_dir).expanduser().resolve()
     latent_dir.mkdir(parents=True, exist_ok=True)
 
+    parsed_data_files = _parse_data_files(args.data_files)
+
     ds = load_dataset(
         path=args.dataset,
         name=args.config,
         split=args.split,
-        data_files=_parse_data_files(args.data_files),
+        data_files=parsed_data_files,
         cache_dir=args.cache_dir,
         trust_remote_code=args.trust_remote_code,
         streaming=args.streaming,
     )
 
     if args.audio_column not in ds.column_names:
-        raise ValueError(f"audio column '{args.audio_column}' not found: {ds.column_names}")
+        file_name_column = "file_name"
+        audio_root = _infer_audio_root_from_data_files(parsed_data_files)
+        if file_name_column in ds.column_names and audio_root is not None:
+            print(
+                f"[prepare_manifest] audio column '{args.audio_column}' not found; "
+                f"synthesizing it from '{file_name_column}' under {audio_root}"
+            )
+            ds = _materialize_audio_column_from_file_name(
+                ds,
+                audio_column=args.audio_column,
+                file_name_column=file_name_column,
+                audio_root=audio_root,
+            )
+        else:
+            raise ValueError(f"audio column '{args.audio_column}' not found: {ds.column_names}")
     if args.text_column not in ds.column_names:
         raise ValueError(f"text column '{args.text_column}' not found: {ds.column_names}")
     if args.caption_column is not None and args.caption_column not in ds.column_names:
