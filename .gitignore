@@ -226,3 +226,8 @@ gradio_outputs_voicedesign/
 # Claude Code runtime state
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+
+# Ad-hoc scratch listings of data/ and outputs/ subdirectories
+/*_dirs.txt
+/*_dirs_sorted.txt
+/unique_*_dirs.txt
