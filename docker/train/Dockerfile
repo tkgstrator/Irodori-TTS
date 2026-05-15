@@ -15,8 +15,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     HF_HOME=/root/.cache/huggingface \
-    BASE_MODEL_REPO=Aratako/Irodori-TTS-500M-v2 \
-    BASE_CKPT=/app/models/Irodori-TTS-500M-v2/model.safetensors
+    BASE_MODEL_REPO=Aratako/Irodori-TTS-500M-v3 \
+    BASE_CKPT=/app/models/Irodori-TTS-500M-v3/model.safetensors
 
 RUN \
   --mount=type=cache,target=/var/lib/apt,sharing=locked \
