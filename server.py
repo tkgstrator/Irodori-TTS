@@ -84,6 +84,7 @@ class SpeakerSpec:
     defaults: dict[str, Any] = field(default_factory=dict)
     category_id: str | None = None
     category_label: str | None = None
+    cv: str | None = None
 
 
 @dataclass
@@ -139,6 +140,7 @@ def _discover_lora_dir(lora_dir: Path) -> list[SpeakerSpec]:
                 logger.warning("skipping defaults in %s: %s", entry, exc)
         category_id = str(meta.get("category.id") or "").strip() or None
         category_label = str(meta.get("category.label") or "").strip() or None
+        cv = str(meta.get("speaker.cv") or "").strip() or None
         specs.append(
             SpeakerSpec(
                 uuid=str(speaker_uuid),
@@ -147,6 +149,7 @@ def _discover_lora_dir(lora_dir: Path) -> list[SpeakerSpec]:
                 defaults=defaults,
                 category_id=category_id,
                 category_label=category_label,
+                cv=cv,
             )
         )
         logger.info("discovered LoRA: %s (uuid=%s)", name, speaker_uuid)
@@ -577,6 +580,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
                 {
                     "uuid": s.uuid,
                     "name": s.name,
+                    "cv": s.cv,
                     "defaults": s.defaults,
                     "category": {
                         "id": s.category_id,
