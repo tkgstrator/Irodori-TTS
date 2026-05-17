@@ -114,6 +114,10 @@ caption の値はダブルクォートで囲む。エスケープは `\"` と `\
 | `cfg_scale_speaker` | `float` | 話者 CFG スケール |
 | `speaker_kv_scale` | `float` | 話者 KV スケール |
 | `truncation_factor` | `float` | ノイズトランケーション |
+| `seconds` | `float` | 合成秒数の手動指定（`>0`）。指定時は duration predictor を無視 |
+| `min_seconds` | `float` | duration predictor 出力の下限秒（`>0`、既定 `0.5`） |
+| `max_seconds` | `float` | duration predictor 出力の上限秒（`>0`、既定 `30.0`） |
+| `duration_scale` | `float` | predictor 倍率（`>0`、既定 `1.0`） |
 
 未知キーは警告（エラーにしない）。`gap` は負値不可。
 
@@ -143,7 +147,7 @@ caption の値はダブルクォートで囲む。エスケープは `\"` と `\
 - テキスト中の `{shortcode}` はパーサがアノテーションとして展開する（§4）
 - **1 cue は必ず 1 行**。継続行は v1 では未サポート
 
-**オプション** は `[key=value, key=value]` の形式で alias と `:` の間に記述する。使用可能なキーは `seed` / `num_steps` / `cfg_scale_text` / `cfg_scale_speaker` / `speaker_kv_scale` / `truncation_factor`。未知キーはエラー。値は数値リテラル（`seed=-1` のように負値も可）。
+**オプション** は `[key=value, key=value]` の形式で alias と `:` の間に記述する。使用可能なキーは `seed` / `num_steps` / `cfg_scale_text` / `cfg_scale_speaker` / `speaker_kv_scale` / `truncation_factor` / `seconds` / `min_seconds` / `max_seconds` / `duration_scale`。未知キーはエラー。値は数値リテラル（`seed=-1` のように負値も可）。
 
 ### 2.5 Pause
 

@@ -118,8 +118,12 @@
 | `cfg_scale_speaker` | `float` | 任意 | 話者 CFG スケール |
 | `speaker_kv_scale` | `float` | 任意 | `>1` で話者性を強調 |
 | `truncation_factor` | `float` | 任意 | ノイズトランケーション（例: `0.8`） |
+| `seconds` | `float` | 任意 | 合成秒数を手動指定（`>0`）。指定するとモデルの duration predictor を無視し、`min/max_seconds` でクランプ |
+| `min_seconds` | `float` | 任意 | duration predictor 出力の下限秒（`>0`、デフォルト `0.5`）。短文で破綻する場合に引き上げる |
+| `max_seconds` | `float` | 任意 | duration predictor 出力の上限秒（`>0`、デフォルト `30.0`） |
+| `duration_scale` | `float` | 任意 | predictor 予測値の倍率（`>0`、デフォルト `1.0`） |
 
-**パラメータ解決順序**: リクエスト値 → 話者 `defaults` → サーバ内部デフォルト（`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`）
+**パラメータ解決順序**: リクエスト値 → 話者 `defaults` → サーバ内部デフォルト（`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`, `min_seconds=0.5`, `max_seconds=30.0`, `duration_scale=1.0`）。`min_seconds > max_seconds` の組み合わせは 422 で拒否される。
 
 ---
 
@@ -145,6 +149,7 @@
 | `text` | `string` | **必須** | 合成するテキスト |
 | `cfg_scale_caption` | `float` | 任意 | caption CFG スケール（デフォルト `3.0`） |
 | `seed` / `num_steps` / `cfg_scale_text` / `truncation_factor` | — | 任意 | LoRA モードと同じ |
+| `seconds` / `min_seconds` / `max_seconds` / `duration_scale` | `float` | 任意 | LoRA モードと同じ duration 制御 |
 
 `speaker_kv_scale` / `cfg_scale_speaker` は VoiceDesign モードでは無視される。
 
@@ -274,7 +279,11 @@ Content-Type: application/octet-stream
     cfg_scale_speaker?: number,
     speaker_kv_scale?: number,
     truncation_factor?: number,
-    seed?: number
+    seed?: number,
+    seconds?: number,                   //   合成秒数の手動指定（>0）
+    min_seconds?: number,               //   duration predictor 下限（>0、既定 0.5）
+    max_seconds?: number,               //   duration predictor 上限（>0、既定 30.0）
+    duration_scale?: number             //   predictor 倍率（>0、既定 1.0）
   },
   speakers: {                           // 必須。エイリアス → 話者参照のマップ
     [alias: string]: SpeakerRef
@@ -309,7 +318,11 @@ Content-Type: application/octet-stream
     "cfg_scale_text"?: number,
     "cfg_scale_speaker"?: number,
     "speaker_kv_scale"?: number,
-    "truncation_factor"?: number
+    "truncation_factor"?: number,
+    "seconds"?: number,
+    "min_seconds"?: number,
+    "max_seconds"?: number,
+    "duration_scale"?: number
   }
 }
 
@@ -337,7 +350,7 @@ Content-Type: application/octet-stream
 
 cue ごとに以下の順でマージされる（後が優先）:
 
-1. サーバ内部デフォルト（`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`）
+1. サーバ内部デフォルト（`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`, `min_seconds=0.5`, `max_seconds=30.0`, `duration_scale=1.0`）
 2. 話者 LoRA の `defaults`（`/speakers` で確認可能）
 3. VDS-JSON の `defaults` ブロック
 4. 各 cue の `options`

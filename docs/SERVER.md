@@ -84,7 +84,7 @@ uv run python scripts/lora/export_lora_to_safetensors.py \
 | `format`          | `irodori-tts-lora/v1` 固定。LoRA 単一ファイル export の schema version で、ベースモデル世代（v2 / v3）とは別物 |
 | `name`            | サーバ / デモ UI に表示される名前。通常は `speaker.label` と同じ |
 | `uuid`            | `speaker_id`。`--uuid` 未指定時は出力ファイル名から UUIDv5 で決定論的に生成 |
-| `defaults`        | JSON。`num_steps` / `cfg_scale_text` / `cfg_scale_speaker` / `speaker_kv_scale` / `truncation_factor` の既定値 |
+| `defaults`        | JSON。`num_steps` / `cfg_scale_text` / `cfg_scale_speaker` / `speaker_kv_scale` / `truncation_factor` / `seconds` / `min_seconds` / `max_seconds` / `duration_scale` の既定値 |
 | `adapter_config`  | JSON。PEFT の `adapter_config.json`（rank / target modules 等） |
 | `base_init`       | JSON。学習時の `base_init.json` |
 | `model_config`    | JSON。学習時の `config.json`（モデル / train config dump） |
@@ -198,10 +198,14 @@ docker compose -f docker/runtime/compose.yaml logs -f    # ログ追跡
 | `cfg_scale_speaker` | 任意 | 話者 CFG scale |
 | `speaker_kv_scale`  | 任意 | `>1` で話者性を強める |
 | `truncation_factor` | 任意 | 例: `0.8`。ノイズトランケーション |
+| `seconds`           | 任意 | 合成秒数を手動指定。`>0`。指定するとモデルの duration predictor を無視し、`min_seconds` / `max_seconds` でクランプ |
+| `min_seconds`       | 任意 | duration predictor 出力の下限秒。`>0`。デフォルト `0.5`。短文で破綻する場合に引き上げる |
+| `max_seconds`       | 任意 | duration predictor 出力の上限秒。`>0`。デフォルト `30.0` |
+| `duration_scale`    | 任意 | predictor 予測値の倍率。`>0`。デフォルト `1.0` |
 
-省略した項目は LoRA metadata の `defaults` → サーバ内部の既定値 (`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`) の順にフォールバックします。
+省略した項目は LoRA metadata の `defaults` → サーバ内部の既定値 (`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`, `min_seconds=0.5`, `max_seconds=30.0`, `duration_scale=1.0`) の順にフォールバックします。`min_seconds > max_seconds` になる組み合わせは 422 で拒否されます。
 
-レスポンス: `audio/wav` バイナリ。ヘッダに `X-TTS-Speaker-Id` / `X-TTS-Speaker-Name` / `X-TTS-Used-Seed` / `X-TTS-Sample-Rate` が付きます。固定で 30 秒長の波形が返るので、無音末尾が気になる場合はクライアント側で trim してください。
+レスポンス: `audio/wav` バイナリ。ヘッダに `X-TTS-Speaker-Id` / `X-TTS-Speaker-Name` / `X-TTS-Used-Seed` / `X-TTS-Sample-Rate` が付きます。v3 系チェックポイントでは duration predictor が長さを決めるため、不要な末尾無音は最小限です（v2 系は 30 秒固定のフォールバック）。
 
 ```bash
 # LoRA 単発合成
@@ -231,6 +235,7 @@ curl -s http://localhost:8765/synth \
 | `text`                | ◯    | 合成するテキスト |
 | `cfg_scale_caption`   | 任意 | caption CFG scale（デフォルト `3.0`） |
 | `seed` / `num_steps` / `cfg_scale_text` / `truncation_factor` | 任意 | LoRA モードと同じ |
+| `seconds` / `min_seconds` / `max_seconds` / `duration_scale` | 任意 | LoRA モードと同じ duration 制御 |
 
 `speaker_kv_scale` / `cfg_scale_speaker` は VoiceDesign モードでは無視されます。
 

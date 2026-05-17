@@ -13,6 +13,10 @@ class SynthOptions:
     cfg_scale_speaker: float | None = None
     speaker_kv_scale: float | None = None
     truncation_factor: float | None = None
+    seconds: float | None = None
+    min_seconds: float | None = None
+    max_seconds: float | None = None
+    duration_scale: float | None = None
 
 
 SYNTH_OPTION_KEYS = frozenset(f.name for f in SynthOptions.__dataclass_fields__.values())

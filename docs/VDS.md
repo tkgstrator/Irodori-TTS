@@ -16,7 +16,7 @@
 | 出力長 | 固定30秒窓（超過分はサンプラ側で切詰） |
 | 話者指定 | `speaker_id` = LoRA由来のUUID（参照波形は受け付けない） |
 | 推奨タイムアウト | 30–60秒 |
-| サンプリングパラメータ | `seed` / `num_steps` / `cfg_scale_text` / `cfg_scale_speaker` / `speaker_kv_scale` / `truncation_factor`（全て任意、未指定時はLoRA→サーバデフォルトにフォールバック） |
+| サンプリングパラメータ | `seed` / `num_steps` / `cfg_scale_text` / `cfg_scale_speaker` / `speaker_kv_scale` / `truncation_factor` / `seconds` / `min_seconds` / `max_seconds` / `duration_scale`（全て任意、未指定時はLoRA→サーバデフォルトにフォールバック） |
 | 話者一覧 | `GET /speakers` で取得、起動時固定（動的追加されない） |
 
 **Caption（VoiceDesign）対応:**
@@ -108,7 +108,7 @@
 - `<alias>` は `@speaker` で事前定義されたエイリアス。識別子は `[A-Za-z_][A-Za-z0-9_-]*`。
 - `:` の **前後に空白を許す**。
 - `<text>` は行末までの任意のテキスト（1行）。先頭・末尾の空白はトリムする。テキスト内の `#` はコメントにしない（行頭のみ）。
-- オプションの `<k>` は `seed` / `num_steps` / `cfg_scale_text` / `cfg_scale_speaker` / `speaker_kv_scale` / `truncation_factor` のいずれか。未知キーはエラー。
+- オプションの `<k>` は `seed` / `num_steps` / `cfg_scale_text` / `cfg_scale_speaker` / `speaker_kv_scale` / `truncation_factor` / `seconds` / `min_seconds` / `max_seconds` / `duration_scale` のいずれか。未知キーはエラー。
 - オプションの `<v>` は数値リテラル（整数または浮動小数）。`seed=-1` のように負値も可。
 
 **1 cue = 1 行:**
@@ -200,6 +200,10 @@ type SynthOptions = {
   cfg_scale_speaker?: number
   speaker_kv_scale?: number
   truncation_factor?: number
+  seconds?: number          // 合成秒数手動指定（>0、predictor を上書き）
+  min_seconds?: number      // predictor 下限（>0、既定 0.5）
+  max_seconds?: number      // predictor 上限（>0、既定 30.0）
+  duration_scale?: number   // predictor 倍率（>0、既定 1.0）
   gap?: number              // cue 間デフォルト無音（秒）。defaults 専用、cue の options では無視
 }
 

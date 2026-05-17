@@ -21,7 +21,7 @@ import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from irodori_tts.inference_runtime import (
     InferenceRuntime,
@@ -42,8 +42,8 @@ from irodori_tts.vds import (
     parse_json,
     parse_text,
 )
-from irodori_tts.vds.shortcodes import expand_shortcodes
 from irodori_tts.vds.parser import ParseError
+from irodori_tts.vds.shortcodes import expand_shortcodes
 
 _FADE_MS = 50
 
@@ -82,6 +82,8 @@ class SpeakerSpec:
     name: str
     adapter: str
     defaults: dict[str, Any] = field(default_factory=dict)
+    category_id: str | None = None
+    category_label: str | None = None
 
 
 @dataclass
@@ -135,12 +137,16 @@ def _discover_lora_dir(lora_dir: Path) -> list[SpeakerSpec]:
                     defaults = parsed
             except json.JSONDecodeError as exc:
                 logger.warning("skipping defaults in %s: %s", entry, exc)
+        category_id = str(meta.get("category.id") or "").strip() or None
+        category_label = str(meta.get("category.label") or "").strip() or None
         specs.append(
             SpeakerSpec(
                 uuid=str(speaker_uuid),
                 name=str(name),
                 adapter=str(entry),
                 defaults=defaults,
+                category_id=category_id,
+                category_label=category_label,
             )
         )
         logger.info("discovered LoRA: %s (uuid=%s)", name, speaker_uuid)
@@ -166,6 +172,8 @@ def load_config(path: Path) -> ServerConfig:
                 name=str(s["name"]),
                 adapter=str(s["adapter"]),
                 defaults=dict(s.get("defaults") or {}),
+                category_id=(str(s["category_id"]).strip() or None) if s.get("category_id") else None,
+                category_label=(str(s["category_label"]).strip() or None) if s.get("category_label") else None,
             )
         )
 
@@ -330,6 +338,22 @@ class VdsSynthOptions(BaseModel):
     cfg_scale_speaker: float | None = Field(default=None, description="Speaker CFG scale.")
     speaker_kv_scale: float | None = Field(default=None, description="Speaker KV scale.")
     truncation_factor: float | None = Field(default=None, description="Noise truncation factor.")
+    seconds: float | None = Field(
+        default=None, gt=0,
+        description="Manual synthesis duration in seconds (overrides the duration predictor).",
+    )
+    min_seconds: float | None = Field(
+        default=None, gt=0,
+        description="Lower bound for the duration predictor output (default 0.5).",
+    )
+    max_seconds: float | None = Field(
+        default=None, gt=0,
+        description="Upper bound for the duration predictor output (default 30.0).",
+    )
+    duration_scale: float | None = Field(
+        default=None, gt=0,
+        description="Multiplier applied to the predicted duration (default 1.0).",
+    )
 
 
 class VdsSpeechCue(BaseModel):
@@ -372,6 +396,22 @@ class VdsDefaults(BaseModel):
     speaker_kv_scale: float | None = Field(default=None, description="Default speaker KV scale.")
     truncation_factor: float | None = Field(default=None, description="Default noise truncation factor.")
     seed: int | None = Field(default=None, description="Default sampling seed.")
+    seconds: float | None = Field(
+        default=None, gt=0,
+        description="Default manual synthesis duration in seconds (overrides the predictor).",
+    )
+    min_seconds: float | None = Field(
+        default=None, gt=0,
+        description="Default lower bound for the duration predictor output.",
+    )
+    max_seconds: float | None = Field(
+        default=None, gt=0,
+        description="Default upper bound for the duration predictor output.",
+    )
+    duration_scale: float | None = Field(
+        default=None, gt=0,
+        description="Default multiplier applied to the predicted duration.",
+    )
 
 
 class VdsScriptBody(BaseModel):
@@ -434,6 +474,36 @@ class SynthRequest(BaseModel):
         description="VDS-JSON script object for drama mode. "
         "If provided, speaker_id/text/caption are ignored.",
     )
+    seconds: float | None = Field(
+        default=None, gt=0,
+        description="Manual synthesis duration in seconds. "
+        "When set, overrides the duration predictor; clamped by min/max_seconds.",
+    )
+    min_seconds: float | None = Field(
+        default=None, gt=0,
+        description="Lower bound for the duration predictor output. "
+        "Default 0.5s. Useful when very short text yields too-short audio.",
+    )
+    max_seconds: float | None = Field(
+        default=None, gt=0,
+        description="Upper bound for the duration predictor output. Default 30.0s.",
+    )
+    duration_scale: float | None = Field(
+        default=None, gt=0,
+        description="Multiplier applied to the predicted duration. Default 1.0.",
+    )
+
+    @model_validator(mode="after")
+    def _check_duration_bounds(self) -> SynthRequest:
+        if (
+            self.min_seconds is not None
+            and self.max_seconds is not None
+            and self.min_seconds > self.max_seconds
+        ):
+            raise ValueError(
+                f"min_seconds ({self.min_seconds}) must be <= max_seconds ({self.max_seconds})"
+            )
+        return self
 
 
 _POSITIVE_ONLY = {
@@ -452,6 +522,10 @@ def _merge_defaults(req: SynthRequest, defaults: dict[str, Any]) -> dict[str, An
         "cfg_scale_speaker": 5.0,
         "speaker_kv_scale": None,
         "truncation_factor": None,
+        "seconds": None,
+        "min_seconds": 0.5,
+        "max_seconds": 30.0,
+        "duration_scale": 1.0,
     }
     for k, v in defaults.items():
         if k in resolved:
@@ -464,6 +538,18 @@ def _merge_defaults(req: SynthRequest, defaults: dict[str, Any]) -> dict[str, An
             continue
         resolved[k] = override
     resolved["seed"] = req.seed if (req.seed is not None and req.seed >= 0) else None
+    if (
+        resolved["min_seconds"] is not None
+        and resolved["max_seconds"] is not None
+        and float(resolved["min_seconds"]) > float(resolved["max_seconds"])
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"resolved min_seconds ({resolved['min_seconds']}) > "
+                f"max_seconds ({resolved['max_seconds']}) after merging speaker defaults"
+            ),
+        )
     return resolved
 
 
@@ -488,7 +574,15 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
     def list_speakers() -> dict[str, Any]:
         return {
             "speakers": [
-                {"uuid": s.uuid, "name": s.name, "defaults": s.defaults}
+                {
+                    "uuid": s.uuid,
+                    "name": s.name,
+                    "defaults": s.defaults,
+                    "category": {
+                        "id": s.category_id,
+                        "label": s.category_label,
+                    },
+                }
                 for s in registry.list_speakers()
             ]
         }
@@ -502,6 +596,10 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
         cfg_scale_caption: float = 3.0,
         truncation_factor: float | None = None,
         seed: int | None = None,
+        seconds: float | None = None,
+        min_seconds: float = 0.5,
+        max_seconds: float = 30.0,
+        duration_scale: float = 1.0,
     ) -> SamplingRequest:
         cfg_text, cfg_cap, _, _ = resolve_cfg_scales(
             cfg_guidance_mode="independent",
@@ -522,7 +620,10 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             ref_ensure_max=True,
             num_candidates=1,
             decode_mode="sequential",
-            seconds=None,
+            seconds=seconds,
+            duration_scale=duration_scale,
+            min_seconds=min_seconds,
+            max_seconds=max_seconds,
             max_ref_seconds=30.0,
             max_text_len=None,
             max_caption_len=None,
@@ -585,6 +686,10 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
                 cfg_scale_caption=cfg_cap,
                 truncation_factor=trunc,
                 seed=seed,
+                seconds=req.seconds,
+                min_seconds=req.min_seconds if req.min_seconds is not None else 0.5,
+                max_seconds=req.max_seconds if req.max_seconds is not None else 30.0,
+                duration_scale=req.duration_scale if req.duration_scale is not None else 1.0,
             )
 
             try:
@@ -637,7 +742,10 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             ref_ensure_max=True,
             num_candidates=1,
             decode_mode="sequential",
-            seconds=None,
+            seconds=params["seconds"],
+            duration_scale=float(params["duration_scale"]),
+            min_seconds=float(params["min_seconds"]),
+            max_seconds=float(params["max_seconds"]),
             max_ref_seconds=30.0,
             max_text_len=None,
             max_caption_len=None,
@@ -724,6 +832,10 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
         cue_cfg_text = float(synth_defaults.cfg_scale_text) if synth_defaults.cfg_scale_text else 3.0
         cue_trunc = synth_defaults.truncation_factor
         cue_seed: int | None = int(synth_defaults.seed) if synth_defaults.seed is not None else None
+        cue_seconds = synth_defaults.seconds
+        cue_min_seconds = synth_defaults.min_seconds
+        cue_max_seconds = synth_defaults.max_seconds
+        cue_duration_scale = synth_defaults.duration_scale
         if cue.options:
             if cue.options.num_steps is not None:
                 cue_num_steps = int(cue.options.num_steps)
@@ -733,6 +845,14 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
                 cue_trunc = cue.options.truncation_factor
             if cue.options.seed is not None:
                 cue_seed = int(cue.options.seed)
+            if cue.options.seconds is not None:
+                cue_seconds = cue.options.seconds
+            if cue.options.min_seconds is not None:
+                cue_min_seconds = cue.options.min_seconds
+            if cue.options.max_seconds is not None:
+                cue_max_seconds = cue.options.max_seconds
+            if cue.options.duration_scale is not None:
+                cue_duration_scale = cue.options.duration_scale
 
         if isinstance(ref, CaptionSpeaker):
             runtime = registry.acquire_caption()
@@ -743,6 +863,10 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
                 cfg_scale_caption=3.0,
                 truncation_factor=cue_trunc,
                 seed=cue_seed if cue_seed is not None and cue_seed >= 0 else None,
+                seconds=cue_seconds,
+                min_seconds=float(cue_min_seconds) if cue_min_seconds is not None else 0.5,
+                max_seconds=float(cue_max_seconds) if cue_max_seconds is not None else 30.0,
+                duration_scale=float(cue_duration_scale) if cue_duration_scale is not None else 1.0,
             )
             result = runtime.synthesize(sampling_req, log_fn=logger.debug if cfg.show_timings else None)
             audio = result.audio
@@ -759,7 +883,8 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
 
         merged_defaults = dict(spec.defaults)
         for key in ("num_steps", "cfg_scale_text", "cfg_scale_speaker",
-                     "speaker_kv_scale", "truncation_factor", "seed"):
+                     "speaker_kv_scale", "truncation_factor", "seed",
+                     "seconds", "min_seconds", "max_seconds", "duration_scale"):
             val = getattr(synth_defaults, key, None)
             if val is not None:
                 merged_defaults[key] = val
@@ -767,7 +892,8 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
         mock_req_fields: dict[str, Any] = {"speaker_id": ref.uuid, "text": cue.text}
         if cue.options:
             for key in ("seed", "num_steps", "cfg_scale_text", "cfg_scale_speaker",
-                         "speaker_kv_scale", "truncation_factor"):
+                         "speaker_kv_scale", "truncation_factor",
+                         "seconds", "min_seconds", "max_seconds", "duration_scale"):
                 val = getattr(cue.options, key, None)
                 if val is not None:
                     mock_req_fields[key] = val
@@ -795,7 +921,10 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             ref_ensure_max=True,
             num_candidates=1,
             decode_mode="sequential",
-            seconds=None,
+            seconds=params["seconds"],
+            duration_scale=float(params["duration_scale"]),
+            min_seconds=float(params["min_seconds"]),
+            max_seconds=float(params["max_seconds"]),
             max_ref_seconds=30.0,
             max_text_len=None,
             max_caption_len=None,

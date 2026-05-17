@@ -86,4 +86,5 @@ pythonVersion = "3.12"
 dev = [
     "faster-whisper>=1.2.1",
     "onnxruntime<1.23",
+    "pytest>=9.0.3",
 ]
