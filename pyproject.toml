@@ -60,7 +60,7 @@ xpu = [
     "triton-xpu==3.6.0; sys_platform == 'linux' or sys_platform == 'win32'",
 ]
 dev = [
-    "ruff>=0.9.0",
+    "ruff>=0.16.5,<0.17",
 ]
 
 [tool.uv]
@@ -130,20 +130,87 @@ select = [
     "B",
     "C4",
     "UP",
+    "C90",
+    "PL",
+    "SIM",
+    "RET",
+    "ARG",
+    "PTH",
+    "RUF",
+    "N",
+    "A",
+    "ISC",
+    "ICN",
+    "PIE",
+    "TID",
+    "PERF",
+    "FURB",
+    "LOG",
+    "G",
+    "DTZ",
+    "TRY",
+    "SLF",
 ]
 ignore = [
     "E501",
     "B008",
-    "C901",
+    "PLR2004",
+    "PLC0415",
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    "TRY003",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 
+# Files inherited from Aratako/Irodori-TTS keep the original baseline rules only.
+# Reformatting them here would conflict on every upstream merge. Drop a file from
+# these lists once it has genuinely diverged and is maintained by this fork.
+"{convert_checkpoint_to_safetensors,gradio_app,gradio_app_voicedesign,infer,prepare_manifest,quantize_checkpoint,train}.py" = [
+    "C90", "PL", "SIM", "RET", "ARG", "PTH", "RUF",
+    "N", "A", "ISC", "ICN", "PIE", "TID",
+    "PERF", "FURB", "LOG", "G", "DTZ", "TRY", "SLF",
+]
+"irodori_tts/{codec,config,dataset,duration,gradio_emoji_palette,inference_runtime,lora,model,optim,progress,quantization,rf,speaker_inversion,text_normalization,tokenizer,watermark}.py" = [
+    "C90", "PL", "SIM", "RET", "ARG", "PTH", "RUF",
+    "N", "A", "ISC", "ICN", "PIE", "TID",
+    "PERF", "FURB", "LOG", "G", "DTZ", "TRY", "SLF",
+]
+
 [tool.ruff.lint.isort]
 known-first-party = ["irodori_tts"]
 
 [tool.ruff.format]
+# Upstream-inherited files are left byte-for-byte as they arrive, so that merges
+# from Aratako/Irodori-TTS stay reviewable. Keep in sync with per-file-ignores.
+exclude = [
+    "convert_checkpoint_to_safetensors.py",
+    "gradio_app.py",
+    "gradio_app_voicedesign.py",
+    "infer.py",
+    "prepare_manifest.py",
+    "quantize_checkpoint.py",
+    "train.py",
+    "irodori_tts/codec.py",
+    "irodori_tts/config.py",
+    "irodori_tts/dataset.py",
+    "irodori_tts/duration.py",
+    "irodori_tts/gradio_emoji_palette.py",
+    "irodori_tts/inference_runtime.py",
+    "irodori_tts/__init__.py",
+    "irodori_tts/lora.py",
+    "irodori_tts/model.py",
+    "irodori_tts/optim.py",
+    "irodori_tts/progress.py",
+    "irodori_tts/quantization.py",
+    "irodori_tts/rf.py",
+    "irodori_tts/speaker_inversion.py",
+    "irodori_tts/text_normalization.py",
+    "irodori_tts/tokenizer.py",
+    "irodori_tts/watermark.py",
+]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false

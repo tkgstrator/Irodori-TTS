@@ -17,6 +17,7 @@ at launch time by scripts/train/train_multi_speaker.sh via --wandb-run-name.
 Usage:
   uv run python scripts/train/make_speaker_config.py <speaker>
 """
+
 from __future__ import annotations
 
 import argparse
@@ -100,7 +101,9 @@ def main() -> None:
     if dst.exists() and not args.force:
         raise SystemExit(f"{dst} already exists (use --force to overwrite)")
 
-    manifest_path = Path(args.manifest) if args.manifest else Path(f"data/{args.speaker}/manifest.jsonl")
+    manifest_path = (
+        Path(args.manifest) if args.manifest else Path(f"data/{args.speaker}/manifest.jsonl")
+    )
     if not manifest_path.is_file():
         raise SystemExit(f"manifest not found: {manifest_path}")
     n_rows = count_rows(manifest_path)
@@ -111,8 +114,12 @@ def main() -> None:
 
     speaker_cfg = load_speaker_config(args.speaker)
     sample_texts = speaker_cfg["sample_texts"]
-    out_text = re.sub(r"^(\s*save_every:\s*)\d+", rf"\g<1>{save_every}", src_text, count=1, flags=re.MULTILINE)
-    out_text = re.sub(r"^(\s*valid_every:\s*)\d+", rf"\g<1>{valid_every}", out_text, count=1, flags=re.MULTILINE)
+    out_text = re.sub(
+        r"^(\s*save_every:\s*)\d+", rf"\g<1>{save_every}", src_text, count=1, flags=re.MULTILINE
+    )
+    out_text = re.sub(
+        r"^(\s*valid_every:\s*)\d+", rf"\g<1>{valid_every}", out_text, count=1, flags=re.MULTILINE
+    )
 
     prompts_block = build_prompts_block(sample_texts)
     out_text, n_sub = re.subn(

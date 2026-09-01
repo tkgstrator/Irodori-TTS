@@ -17,6 +17,7 @@ Mirrors the parameter defaults documented by the upstream Aratako/Irodori-TTS
 repo. Provided as a separate entrypoint from `infer.py` because the CLI in
 infer.py only takes a single merged checkpoint, not a base + adapter pair.
 """
+
 from __future__ import annotations
 
 import argparse

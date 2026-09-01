@@ -18,6 +18,7 @@ Usage:
 If --speakers is omitted, every data/<speaker>/ with a manifest.jsonl is
 uploaded.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -45,11 +46,75 @@ IGNORE = [
 
 
 def discover_speakers() -> list[str]:
-    speakers = []
-    for sub in sorted(DATA_ROOT.iterdir()):
-        if (sub / "manifest.jsonl").exists() and (sub / "latents").is_dir():
-            speakers.append(sub.name)
+    return [
+        sub.name
+        for sub in sorted(DATA_ROOT.iterdir())
+        if (sub / "manifest.jsonl").exists() and (sub / "latents").is_dir()
+    ]
+
+
+def _resolve_speakers(args: argparse.Namespace) -> list[str]:
+    if args.speakers:
+        speakers = [s.strip() for s in args.speakers.split(",") if s.strip()]
+    else:
+        speakers = discover_speakers()
+    if not speakers:
+        raise SystemExit("no speakers found under data/")
     return speakers
+
+
+def _build_allow_patterns(speakers: list[str]) -> list[str]:
+    for s in speakers:
+        if not (DATA_ROOT / s / "manifest.jsonl").exists():
+            raise SystemExit(f"missing data/{s}/manifest.jsonl")
+    return [pat for s in speakers for pat in (f"{s}/manifest.jsonl", f"{s}/latents/*")]
+
+
+def _print_dry_run(speakers: list[str], allow: list[str]) -> None:
+    from fnmatch import fnmatch
+
+    for s in speakers:
+        for p in sorted((DATA_ROOT / s).rglob("*")):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(DATA_ROOT).as_posix()
+            if any(fnmatch(rel, pat) for pat in IGNORE):
+                continue
+            if not any(fnmatch(rel, pat) for pat in allow):
+                continue
+            print(f"  + {rel}")
+
+
+def _cleanup_legacy_layout(api, args: argparse.Namespace) -> None:
+    # Clean up legacy root-level layout (<speaker>/...) so the repo only keeps
+    # the new speakers/<speaker>/ tree.
+    try:
+        existing = api.list_repo_files(repo_id=args.repo_id, repo_type="dataset")
+    except Exception:
+        existing = []
+    stale = [
+        f for f in existing if not f.startswith("speakers/") and not f.startswith(".") and "/" in f
+    ]
+    if stale:
+        print(f"deleting {len(stale)} legacy file(s) at repo root")
+        api.delete_files(
+            repo_id=args.repo_id,
+            repo_type="dataset",
+            delete_patterns=stale,
+            commit_message="cleanup legacy root layout",
+        )
+
+
+def _upload(api, args: argparse.Namespace, speakers: list[str], allow: list[str]) -> None:
+    api.upload_folder(
+        folder_path=str(DATA_ROOT),
+        repo_id=args.repo_id,
+        repo_type="dataset",
+        path_in_repo="speakers",
+        allow_patterns=allow,
+        ignore_patterns=IGNORE,
+        commit_message=f"upload {len(speakers)} speaker(s): {', '.join(speakers)}",
+    )
 
 
 def main() -> None:
@@ -64,20 +129,8 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    if args.speakers:
-        speakers = [s.strip() for s in args.speakers.split(",") if s.strip()]
-    else:
-        speakers = discover_speakers()
-
-    if not speakers:
-        raise SystemExit("no speakers found under data/")
-
-    allow = []
-    for s in speakers:
-        if not (DATA_ROOT / s / "manifest.jsonl").exists():
-            raise SystemExit(f"missing data/{s}/manifest.jsonl")
-        allow.append(f"{s}/manifest.jsonl")
-        allow.append(f"{s}/latents/*")
+    speakers = _resolve_speakers(args)
+    allow = _build_allow_patterns(speakers)
 
     print(f"repo:     {args.repo_id} (private={args.private})")
     print(f"speakers: {speakers}")
@@ -85,18 +138,7 @@ def main() -> None:
     print(f"ignore:   {IGNORE}")
 
     if args.dry_run:
-        from fnmatch import fnmatch
-
-        for s in speakers:
-            for p in sorted((DATA_ROOT / s).rglob("*")):
-                if not p.is_file():
-                    continue
-                rel = p.relative_to(DATA_ROOT).as_posix()
-                if any(fnmatch(rel, pat) for pat in IGNORE):
-                    continue
-                if not any(fnmatch(rel, pat) for pat in allow):
-                    continue
-                print(f"  + {rel}")
+        _print_dry_run(speakers, allow)
         return
 
     from huggingface_hub import HfApi, create_repo
@@ -108,34 +150,8 @@ def main() -> None:
     create_repo(args.repo_id, repo_type="dataset", private=args.private, exist_ok=True, token=token)
     api = HfApi(token=token)
 
-    # Clean up legacy root-level layout (<speaker>/...) so the repo only keeps
-    # the new speakers/<speaker>/ tree.
-    try:
-        existing = api.list_repo_files(repo_id=args.repo_id, repo_type="dataset")
-    except Exception:
-        existing = []
-    stale = [
-        f for f in existing
-        if not f.startswith("speakers/") and not f.startswith(".") and "/" in f
-    ]
-    if stale:
-        print(f"deleting {len(stale)} legacy file(s) at repo root")
-        api.delete_files(
-            repo_id=args.repo_id,
-            repo_type="dataset",
-            delete_patterns=stale,
-            commit_message="cleanup legacy root layout",
-        )
-
-    api.upload_folder(
-        folder_path=str(DATA_ROOT),
-        repo_id=args.repo_id,
-        repo_type="dataset",
-        path_in_repo="speakers",
-        allow_patterns=allow,
-        ignore_patterns=IGNORE,
-        commit_message=f"upload {len(speakers)} speaker(s): {', '.join(speakers)}",
-    )
+    _cleanup_legacy_layout(api, args)
+    _upload(api, args, speakers, allow)
     print("done.")
 
 

@@ -9,6 +9,7 @@ Usage:
         --repo-id <org>/irodori-tts-voices \
         --archive-dir data/_archives
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,9 +43,7 @@ def main() -> None:
         path_in_repo = f"speakers/{arc.name}"
         size_mb = arc.stat().st_size / (1024 * 1024)
         print(f"adding {path_in_repo} ({size_mb:.1f} MB)")
-        operations.append(
-            CommitOperationAdd(path_in_repo=path_in_repo, path_or_fileobj=str(arc))
-        )
+        operations.append(CommitOperationAdd(path_in_repo=path_in_repo, path_or_fileobj=str(arc)))
 
     print(f"committing {len(operations)} operations to {args.repo_id}")
     api.create_commit(

@@ -4,6 +4,7 @@
 Diff rows: {file_name, original, cleaned, reason}. If `cleaned` is an empty
 string or null, the row is dropped from the output.
 """
+
 import argparse
 import json
 from pathlib import Path

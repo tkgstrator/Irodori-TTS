@@ -18,12 +18,17 @@ Usage:
         --repo-id <org>/irodori-tts-voices \\
         [--speakers <speaker1>,<speaker2>]
 """
+
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
+import shutil
 import tarfile
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -40,6 +45,84 @@ def _extract(archive: Path, dest: Path) -> None:
             if name.startswith("/") or ".." in Path(name).parts:
                 raise ValueError(f"{archive}: unsafe path {name!r}")
         tar.extractall(dest)
+
+
+def _resolve_remote_archives(api, args: argparse.Namespace) -> dict[str, str]:
+    remote_files = api.list_repo_files(
+        repo_id=args.repo_id, repo_type="dataset", revision=args.revision
+    )
+    remote_archives = {
+        Path(f).stem.removesuffix(".tar"): f
+        for f in remote_files
+        if f.startswith("speakers/") and f.endswith(".tar.gz")
+    }
+    if not remote_archives:
+        raise SystemExit(f"{args.repo_id}: no speakers/*.tar.gz found")
+    return remote_archives
+
+
+def _resolve_wanted_speakers(
+    args: argparse.Namespace, remote_archives: dict[str, str]
+) -> list[str]:
+    if args.speakers:
+        requested = [s.strip() for s in args.speakers.split(",") if s.strip()]
+        missing_remote = [s for s in requested if s not in remote_archives]
+        if missing_remote:
+            raise SystemExit(f"not on HF: {missing_remote}")
+        return requested
+    return sorted(remote_archives.keys())
+
+
+@dataclass
+class _HfContext:
+    download_fn: Callable
+    http_error_cls: type[Exception]
+    token: str | None
+
+
+def _download_archive_with_retry(
+    ctx: _HfContext, args: argparse.Namespace, speaker: str, path_in_repo: str
+) -> str:
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return ctx.download_fn(
+                repo_id=args.repo_id,
+                repo_type="dataset",
+                revision=args.revision,
+                filename=path_in_repo,
+                token=ctx.token,
+            )
+        except ctx.http_error_cls as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 429 and attempt < args.max_retries:
+                backoff = min(300, 30 * attempt)
+                print(f"[hf_download] {speaker}: 429 (attempt {attempt}); sleeping {backoff}s")
+                time.sleep(backoff)
+                continue
+            raise
+
+
+def _fetch_speaker(
+    ctx: _HfContext,
+    args: argparse.Namespace,
+    speaker: str,
+    path_in_repo: str,
+    target: Path,
+) -> None:
+    local_archive = _download_archive_with_retry(ctx, args, speaker, path_in_repo)
+
+    speaker_dir = target / speaker
+    if speaker_dir.exists():
+        # Partial state — wipe before extracting to avoid stale files.
+        shutil.rmtree(speaker_dir)
+    print(f"[hf_download] extracting {speaker}")
+    _extract(Path(local_archive), speaker_dir)
+
+    if not args.keep_archives:
+        with contextlib.suppress(OSError):
+            Path(local_archive).unlink()
 
 
 def main() -> None:
@@ -68,67 +151,17 @@ def main() -> None:
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     api = HfApi(token=token)
+    ctx = _HfContext(download_fn=hf_hub_download, http_error_cls=HfHubHTTPError, token=token)
 
-    remote_files = api.list_repo_files(
-        repo_id=args.repo_id, repo_type="dataset", revision=args.revision
-    )
-    remote_archives = {
-        Path(f).stem.removesuffix(".tar"): f
-        for f in remote_files
-        if f.startswith("speakers/") and f.endswith(".tar.gz")
-    }
-    if not remote_archives:
-        raise SystemExit(f"{args.repo_id}: no speakers/*.tar.gz found")
-
-    if args.speakers:
-        requested = [s.strip() for s in args.speakers.split(",") if s.strip()]
-        missing_remote = [s for s in requested if s not in remote_archives]
-        if missing_remote:
-            raise SystemExit(f"not on HF: {missing_remote}")
-        wanted = requested
-    else:
-        wanted = sorted(remote_archives.keys())
+    remote_archives = _resolve_remote_archives(api, args)
+    wanted = _resolve_wanted_speakers(args, remote_archives)
 
     to_fetch = [s for s in wanted if not _is_speaker_present(target / s)]
     skipped = len(wanted) - len(to_fetch)
     print(f"[hf_download] wanted={len(wanted)} skip-existing={skipped} to-fetch={len(to_fetch)}")
 
     for speaker in to_fetch:
-        path_in_repo = remote_archives[speaker]
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                local_archive = hf_hub_download(
-                    repo_id=args.repo_id,
-                    repo_type="dataset",
-                    revision=args.revision,
-                    filename=path_in_repo,
-                    token=token,
-                )
-                break
-            except HfHubHTTPError as e:
-                status = getattr(getattr(e, "response", None), "status_code", None)
-                if status == 429 and attempt < args.max_retries:
-                    backoff = min(300, 30 * attempt)
-                    print(f"[hf_download] {speaker}: 429 (attempt {attempt}); sleeping {backoff}s")
-                    time.sleep(backoff)
-                    continue
-                raise
-
-        speaker_dir = target / speaker
-        if speaker_dir.exists():
-            # Partial state — wipe before extracting to avoid stale files.
-            import shutil
-            shutil.rmtree(speaker_dir)
-        print(f"[hf_download] extracting {speaker}")
-        _extract(Path(local_archive), speaker_dir)
-
-        if not args.keep_archives:
-            try:
-                Path(local_archive).unlink()
-            except OSError:
-                pass
+        _fetch_speaker(ctx, args, speaker, remote_archives[speaker], target)
 
     print(f"[hf_download] done; data under {target}")
 

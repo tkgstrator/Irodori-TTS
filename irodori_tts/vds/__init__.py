@@ -16,6 +16,7 @@ from .types import (
 )
 
 __all__ = [
+    "SHORTCODE_MAP",
     "CaptionSpeaker",
     "Cue",
     "Defaults",
@@ -23,7 +24,6 @@ __all__ = [
     "ParseError",
     "ParseWarning",
     "PauseCue",
-    "SHORTCODE_MAP",
     "SceneCue",
     "SpeakerRef",
     "SpeechCue",

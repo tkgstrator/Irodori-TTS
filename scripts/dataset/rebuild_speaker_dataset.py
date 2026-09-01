@@ -27,9 +27,11 @@ Usage:
         --min-seconds 1.5 --max-seconds 30.0 \
         --silence-db -40 --normalize-lufs -23
 """
+
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fnmatch
 import json
 import os
@@ -37,6 +39,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
@@ -45,7 +48,7 @@ from tqdm import tqdm
 
 def _write_wav(path: Path, pcm_bytes: bytes, sample_rate: int = 44100) -> None:
     data_size = len(pcm_bytes)
-    with open(path, "wb") as f:
+    with path.open("wb") as f:
         f.write(b"RIFF")
         f.write(struct.pack("<I", 36 + data_size))
         f.write(b"WAVE")
@@ -70,17 +73,29 @@ def _trim_and_normalize(src: Path, dst: Path, silence_db: float, lufs: float) ->
     )
     subprocess.run(
         [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-i", str(src), "-af", af,
-            "-ar", "48000", "-ac", "1",
-            "-c:a", "pcm_s16le", str(dst),
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(src),
+            "-af",
+            af,
+            "-ar",
+            "48000",
+            "-ac",
+            "1",
+            "-c:a",
+            "pcm_s16le",
+            str(dst),
         ],
         check=True,
     )
     r = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", str(dst)],
-        capture_output=True, text=True, check=True,
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(dst)],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     out = r.stdout.strip()
     if not out or out == "N/A":
@@ -89,6 +104,61 @@ def _trim_and_normalize(src: Path, dst: Path, silence_db: float, lufs: float) ->
         return float(out)
     except ValueError:
         return None
+
+
+@dataclass
+class _RowPaths:
+    tmp_dir: Path
+    wav_dir: Path
+
+
+def _process_row(
+    table,
+    row_idx: int,
+    args: argparse.Namespace,
+    paths: _RowPaths,
+    written: int,
+) -> tuple[str, dict | None]:
+    audio_col = table.column("audio")[row_idx].as_py()
+    transcription = table.column("transcription")[row_idx].as_py()
+
+    if not transcription or not transcription.strip():
+        return "no_text", None
+    if not audio_col or not audio_col.get("bytes"):
+        return "no_audio", None
+
+    raw_path = paths.tmp_dir / "raw.wav"
+    audio_bytes = audio_col["bytes"]
+    if audio_bytes[:4] == b"RIFF":
+        raw_path.write_bytes(audio_bytes)
+    else:
+        _write_wav(raw_path, audio_bytes, sample_rate=44100)
+
+    trimmed_path = paths.tmp_dir / "trimmed.wav"
+    try:
+        dur = _trim_and_normalize(
+            raw_path,
+            trimmed_path,
+            silence_db=args.silence_db,
+            lufs=args.normalize_lufs,
+        )
+    except subprocess.CalledProcessError:
+        dur = None
+    if dur is None:
+        return "err", None
+    if dur < args.min_seconds:
+        return "short", None
+    if dur > args.max_seconds:
+        return "long", None
+
+    final_path = paths.wav_dir / f"{written:06d}.wav"
+    trimmed_path.replace(final_path)
+    record = {
+        "audio": str(final_path),
+        "text": transcription.strip(),
+        "duration": round(dur, 3),
+    }
+    return "kept", record
 
 
 def main() -> None:
@@ -121,88 +191,45 @@ def main() -> None:
     api = HfApi(token=token)
     all_files = list(api.list_repo_tree(args.repo_id, repo_type="dataset", recursive=True))
     parquet_files = sorted(
-        f.path for f in all_files
-        if hasattr(f, "path") and fnmatch.fnmatch(f.path, args.data_files)
+        f.path for f in all_files if hasattr(f, "path") and fnmatch.fnmatch(f.path, args.data_files)
     )
     print(f"matched {len(parquet_files)} parquet shards for '{args.data_files}'")
 
     import pyarrow.parquet as pq
 
     written = 0
-    dropped_short = 0
-    dropped_long = 0
-    dropped_err = 0
-    no_text = 0
-    no_audio = 0
+    counts = {"short": 0, "long": 0, "err": 0, "no_text": 0, "no_audio": 0}
 
-    with tempfile.TemporaryDirectory(dir=tmp_root) as tmp_str, metadata_path.open("w", encoding="utf-8") as meta_f:
-        tmp_dir = Path(tmp_str)
+    with (
+        tempfile.TemporaryDirectory(dir=tmp_root) as tmp_str,
+        metadata_path.open("w", encoding="utf-8") as meta_f,
+    ):
+        paths = _RowPaths(tmp_dir=Path(tmp_str), wav_dir=wav_dir)
         for shard_path in tqdm(parquet_files, desc="shards"):
             local_path = hf_hub_download(
-                args.repo_id, shard_path, repo_type="dataset", token=token,
+                args.repo_id,
+                shard_path,
+                repo_type="dataset",
+                token=token,
             )
             table = pq.read_table(local_path)
             speakers = table.column("speaker").to_pylist()
             for row_idx, spk in enumerate(speakers):
                 if spk != args.speaker:
                     continue
-                audio_col = table.column("audio")[row_idx].as_py()
-                transcription = table.column("transcription")[row_idx].as_py()
-
-                if not transcription or not transcription.strip():
-                    no_text += 1
-                    continue
-                if not audio_col or not audio_col.get("bytes"):
-                    no_audio += 1
-                    continue
-
-                raw_path = tmp_dir / "raw.wav"
-                audio_bytes = audio_col["bytes"]
-                if audio_bytes[:4] == b"RIFF":
-                    raw_path.write_bytes(audio_bytes)
+                status, record = _process_row(table, row_idx, args, paths, written)
+                if status == "kept":
+                    meta_f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    written += 1
                 else:
-                    _write_wav(raw_path, audio_bytes, sample_rate=44100)
+                    counts[status] += 1
 
-                trimmed_path = tmp_dir / "trimmed.wav"
-                try:
-                    dur = _trim_and_normalize(
-                        raw_path, trimmed_path,
-                        silence_db=args.silence_db, lufs=args.normalize_lufs,
-                    )
-                except subprocess.CalledProcessError:
-                    dropped_err += 1
-                    continue
-                if dur is None:
-                    dropped_err += 1
-                    continue
-                if dur < args.min_seconds:
-                    dropped_short += 1
-                    continue
-                if dur > args.max_seconds:
-                    dropped_long += 1
-                    continue
-
-                final_path = wav_dir / f"{written:06d}.wav"
-                trimmed_path.replace(final_path)
-
-                meta_f.write(json.dumps(
-                    {
-                        "audio": str(final_path),
-                        "text": transcription.strip(),
-                        "duration": round(dur, 3),
-                    },
-                    ensure_ascii=False,
-                ) + "\n")
-                written += 1
-
-    try:
+    with contextlib.suppress(OSError):
         tmp_root.rmdir()
-    except OSError:
-        pass
 
     print(
-        f"kept={written} short={dropped_short} long={dropped_long} "
-        f"ffmpeg_err={dropped_err} no_text={no_text} no_audio={no_audio}"
+        f"kept={written} short={counts['short']} long={counts['long']} "
+        f"ffmpeg_err={counts['err']} no_text={counts['no_text']} no_audio={counts['no_audio']}"
     )
     print(f"wavs:     {wav_dir}")
     print(f"metadata: {metadata_path}")

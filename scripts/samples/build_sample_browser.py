@@ -8,6 +8,7 @@ where label sorts by step (e.g. step_0001000, best_step_0003900_loss_0.831009).
 Produces an HTML file with a slider that switches between checkpoints and a
 waveform + play button per prompt (powered by wavesurfer.js from a CDN).
 """
+
 from __future__ import annotations
 
 import argparse
