@@ -12,8 +12,9 @@ relying on ambient environment variables. The class:
 
 `WandbClient.run` is exposed for code paths that already accept a raw
 `wandb.run` object (e.g. `irodori_tts.training_samples`); new code should
-prefer `WandbClient.log()` / `WandbClient.Audio()`.
+prefer `WandbClient.log()` / `WandbClient.audio()`.
 """
+
 from __future__ import annotations
 
 import os
@@ -113,7 +114,7 @@ class WandbClient:
             return
         self._run.log(data, step=step)
 
-    def Audio(
+    def audio(
         self,
         audio: Any,
         *,
@@ -136,7 +137,7 @@ class WandbClient:
         self._run = None
 
 
-def from_env(
+def from_env(  # noqa: PLR0913 -- mirrors train.py's call site (out of scope here); each kwarg is a distinct, independently-optional config knob.
     *,
     enabled: bool,
     project: str | None,

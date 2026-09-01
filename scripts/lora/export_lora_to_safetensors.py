@@ -22,6 +22,7 @@ import json
 import re
 import sys
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -90,7 +91,9 @@ def _load_dataset_config(checkpoint_dir: Path) -> dict[str, Any] | None:
         if isinstance(train_cfg, dict):
             manifest_path = train_cfg.get("manifest_path")
             if isinstance(manifest_path, str) and manifest_path.strip():
-                resolved_manifest = _resolve_saved_path(manifest_path, checkpoint_dir=checkpoint_dir)
+                resolved_manifest = _resolve_saved_path(
+                    manifest_path, checkpoint_dir=checkpoint_dir
+                )
                 if resolved_manifest is not None:
                     candidate = resolved_manifest.parent / "config.yaml"
                     if candidate.is_file():
@@ -207,6 +210,66 @@ def _resolve_export_name(
     )
 
 
+@dataclass
+class _ExportMetadataInputs:
+    checkpoint_dir: Path
+    output: Path
+    dataset_config: dict[str, Any] | None
+    adapter_config: dict
+    resolved_name: str
+    defaults: dict
+    speaker_uuid: str | None
+
+
+def _augment_export_metadata(metadata: dict, inputs: _ExportMetadataInputs) -> str:
+    checkpoint_dir = inputs.checkpoint_dir
+    output = inputs.output
+    dataset_config = inputs.dataset_config
+    adapter_config = inputs.adapter_config
+    resolved_name = inputs.resolved_name
+    defaults = inputs.defaults
+    speaker_uuid = inputs.speaker_uuid
+
+    resolved_speaker_id = _resolve_export_speaker_id(
+        dataset_config=dataset_config,
+        checkpoint_dir=checkpoint_dir,
+        existing_metadata=metadata,
+    )
+    resolved_model_name = _resolve_model_name(metadata.get("base_model"))
+
+    metadata.update(_flatten_dataset_metadata(dataset_config))
+    metadata.update(
+        {
+            "format": EXPORT_FORMAT,
+            "name": resolved_name,
+            "adapter_config": json.dumps(adapter_config, ensure_ascii=False),
+        }
+    )
+    if resolved_speaker_id:
+        metadata["speaker"] = resolved_speaker_id
+    if resolved_model_name:
+        metadata["model_name"] = resolved_model_name
+
+    resolved_uuid = str(speaker_uuid or uuid.uuid5(_NAMESPACE, output.stem))
+    metadata["uuid"] = resolved_uuid
+
+    if defaults:
+        metadata["defaults"] = json.dumps(defaults, ensure_ascii=False)
+
+    for key, filename in (("base_init", "base_init.json"), ("model_config", "config.json")):
+        payload = _read_json(checkpoint_dir / filename)
+        if payload is not None:
+            metadata[key] = json.dumps(payload, ensure_ascii=False)
+
+    manifest_size_path = checkpoint_dir / "manifest_size.txt"
+    if manifest_size_path.is_file():
+        value = manifest_size_path.read_text(encoding="utf-8").strip()
+        if value:
+            metadata["manifest_size"] = value
+
+    return resolved_uuid
+
+
 def export(
     *,
     checkpoint_dir: Path,
@@ -225,48 +288,22 @@ def export(
     resolved_name = _resolve_export_name(requested_name=name, dataset_config=dataset_config)
 
     with safe_open(str(weights_path), framework="pt") as f:
-        tensors = {key: f.get_tensor(key) for key in f.keys()}
+        # safe_open has no __iter__/__getitem__, so `for key in f` is not viable here.
+        tensors = {key: f.get_tensor(key) for key in f.keys()}  # noqa: SIM118
         metadata = dict(f.metadata() or {})
 
-    resolved_speaker_id = _resolve_export_speaker_id(
-        dataset_config=dataset_config,
-        checkpoint_dir=checkpoint_dir,
-        existing_metadata=metadata,
+    resolved_uuid = _augment_export_metadata(
+        metadata,
+        _ExportMetadataInputs(
+            checkpoint_dir=checkpoint_dir,
+            output=output,
+            dataset_config=dataset_config,
+            adapter_config=adapter_config,
+            resolved_name=resolved_name,
+            defaults=defaults,
+            speaker_uuid=speaker_uuid,
+        ),
     )
-    resolved_model_name = _resolve_model_name(metadata.get("base_model"))
-
-    metadata.update(_flatten_dataset_metadata(dataset_config))
-    metadata.update({
-        "format": EXPORT_FORMAT,
-        "name": resolved_name,
-        "adapter_config": json.dumps(adapter_config, ensure_ascii=False),
-    })
-    if resolved_speaker_id:
-        metadata["speaker"] = resolved_speaker_id
-    if resolved_model_name:
-        metadata["model_name"] = resolved_model_name
-
-    resolved_uuid = speaker_uuid
-    if not resolved_uuid:
-        resolved_uuid = str(uuid.uuid5(_NAMESPACE, output.stem))
-    metadata["uuid"] = str(resolved_uuid)
-
-    if defaults:
-        metadata["defaults"] = json.dumps(defaults, ensure_ascii=False)
-
-    base_init = _read_json(checkpoint_dir / "base_init.json")
-    if base_init is not None:
-        metadata["base_init"] = json.dumps(base_init, ensure_ascii=False)
-
-    model_config = _read_json(checkpoint_dir / "config.json")
-    if model_config is not None:
-        metadata["model_config"] = json.dumps(model_config, ensure_ascii=False)
-
-    manifest_size_path = checkpoint_dir / "manifest_size.txt"
-    if manifest_size_path.is_file():
-        value = manifest_size_path.read_text(encoding="utf-8").strip()
-        if value:
-            metadata["manifest_size"] = value
 
     output.parent.mkdir(parents=True, exist_ok=True)
     save_file(tensors, str(output), metadata=metadata)

@@ -9,6 +9,7 @@ Usage:
     --repo-id ultemica/irodori-tts-<speaker> \\
     [--private] [--dry-run]
 """
+
 from __future__ import annotations
 
 import argparse

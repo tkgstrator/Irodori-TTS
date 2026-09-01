@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Heuristic cleanup for transcribed metadata jsonl."""
+
 from __future__ import annotations
 
 import argparse
@@ -16,8 +17,7 @@ ASCII_LETTER_RE = re.compile(r"[A-Za-z]")
 def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     text = text.replace("!", "！").replace("?", "？")
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def repeated_char_ratio(text: str) -> float:
@@ -48,31 +48,40 @@ def judge(text: str, min_chars: int, rep_threshold: float, ascii_threshold: floa
     return None
 
 
-def main() -> None:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--src", required=True, help="input metadata_wts.jsonl")
     parser.add_argument("--out", required=True, help="output metadata.jsonl (cleaned)")
-    parser.add_argument("--rejected", default=None,
-                        help="output metadata_rejected.jsonl (default: alongside --out)")
+    parser.add_argument(
+        "--rejected", default=None, help="output metadata_rejected.jsonl (default: alongside --out)"
+    )
     parser.add_argument("--min-chars", type=int, default=3)
     parser.add_argument("--rep-threshold", type=float, default=0.5)
     parser.add_argument("--ascii-threshold", type=float, default=0.3)
     parser.add_argument("--drop-duplicates", action="store_true", default=True)
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    src = Path(args.src)
-    out = Path(args.out)
-    rejected = Path(args.rejected) if args.rejected else out.with_name("metadata_rejected.jsonl")
-    out.parent.mkdir(parents=True, exist_ok=True)
 
+def load_records(src: Path) -> list[dict]:
     records = []
     with src.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
+        for raw_line in f:
+            stripped_line = raw_line.strip()
+            if not stripped_line:
                 continue
-            records.append(json.loads(line))
+            records.append(json.loads(stripped_line))
+    return records
 
+
+def write_jsonl(path: Path, rows: list[dict]) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def classify_records(
+    records: list[dict], args: argparse.Namespace
+) -> tuple[list[dict], list[dict]]:
     seen_texts: dict[str, str] = {}
     kept: list[dict] = []
     rejects: list[dict] = []
@@ -93,18 +102,32 @@ def main() -> None:
             r["reject_reason"] = reason
             rejects.append(r)
 
-    with out.open("w", encoding="utf-8") as f:
-        for r in kept:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    with rejected.open("w", encoding="utf-8") as f:
-        for r in rejects:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return kept, rejects
 
+
+def print_summary(records: list[dict], kept: list[dict], rejects: list[dict]) -> None:
     print(f"total={len(records)} kept={len(kept)} rejected={len(rejects)}")
     if rejects:
         reason_counts = Counter(r["reject_reason"].split("_of_")[0] for r in rejects)
         for k, v in reason_counts.most_common():
             print(f"  {k}: {v}")
+
+
+def main() -> None:
+    args = parse_args()
+
+    src = Path(args.src)
+    out = Path(args.out)
+    rejected = Path(args.rejected) if args.rejected else out.with_name("metadata_rejected.jsonl")
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    records = load_records(src)
+    kept, rejects = classify_records(records, args)
+
+    write_jsonl(out, kept)
+    write_jsonl(rejected, rejects)
+
+    print_summary(records, kept, rejects)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ Usage:
   uv run python scripts/dataset/hf_download_speaker.py <speaker> \\
     --repo-id ultemica/irodori-tts-<speaker>
 """
+
 from __future__ import annotations
 
 import argparse

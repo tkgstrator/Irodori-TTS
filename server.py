@@ -168,17 +168,19 @@ def load_config(path: Path) -> ServerConfig:
             lora_dir = (path.parent / lora_dir).resolve() if not lora_dir.exists() else lora_dir
         speakers.extend(_discover_lora_dir(lora_dir))
 
-    for s in raw.get("speakers") or []:
-        speakers.append(
-            SpeakerSpec(
-                uuid=str(s["uuid"]),
-                name=str(s["name"]),
-                adapter=str(s["adapter"]),
-                defaults=dict(s.get("defaults") or {}),
-                category_id=(str(s["category_id"]).strip() or None) if s.get("category_id") else None,
-                category_label=(str(s["category_label"]).strip() or None) if s.get("category_label") else None,
-            )
+    speakers.extend(
+        SpeakerSpec(
+            uuid=str(s["uuid"]),
+            name=str(s["name"]),
+            adapter=str(s["adapter"]),
+            defaults=dict(s.get("defaults") or {}),
+            category_id=(str(s["category_id"]).strip() or None) if s.get("category_id") else None,
+            category_label=(str(s["category_label"]).strip() or None)
+            if s.get("category_label")
+            else None,
         )
+        for s in raw.get("speakers") or []
+    )
 
     return ServerConfig(
         base_checkpoint=(str(raw["base_checkpoint"]) if raw.get("base_checkpoint") else None),
@@ -191,7 +193,9 @@ def load_config(path: Path) -> ServerConfig:
         codec_repo=str(raw.get("codec_repo", "Aratako/Semantic-DACVAE-Japanese-32dim")),
         codec_deterministic_encode=bool(raw.get("codec_deterministic_encode", True)),
         codec_deterministic_decode=bool(raw.get("codec_deterministic_decode", True)),
-        caption_checkpoint=(str(raw["caption_checkpoint"]) if raw.get("caption_checkpoint") else None),
+        caption_checkpoint=(
+            str(raw["caption_checkpoint"]) if raw.get("caption_checkpoint") else None
+        ),
         caption_hf_repo=(str(raw["caption_hf_repo"]) if raw.get("caption_hf_repo") else None),
         caption_hf_filename=str(raw.get("caption_hf_filename", "model.safetensors")),
         tail_window_size=int(raw.get("tail_window_size", 20)),
@@ -203,7 +207,10 @@ def load_config(path: Path) -> ServerConfig:
 
 
 def _resolve_checkpoint(
-    local_path: str | None, hf_repo: str | None, hf_filename: str, label: str,
+    local_path: str | None,
+    hf_repo: str | None,
+    hf_filename: str,
+    label: str,
 ) -> Path:
     local = Path(local_path) if local_path else None
     if local is not None and local.exists():
@@ -223,7 +230,10 @@ def _resolve_checkpoint(
 
 def resolve_base_checkpoint(cfg: ServerConfig) -> Path:
     return _resolve_checkpoint(
-        cfg.base_checkpoint, cfg.base_hf_repo, cfg.base_hf_filename, "base",
+        cfg.base_checkpoint,
+        cfg.base_hf_repo,
+        cfg.base_hf_filename,
+        "base",
     )
 
 
@@ -249,6 +259,14 @@ class RuntimeRegistry:
     @property
     def caption_available(self) -> bool:
         return self._caption_runtime is not None
+
+    @property
+    def sample_rate(self) -> int | None:
+        """Codec sample rate of whichever runtime is loaded, or None if neither is."""
+        for rt in (self._runtime, self._caption_runtime):
+            if rt is not None:
+                return int(rt.codec.sample_rate)
+        return None
 
     def _make_key(self, checkpoint: str) -> RuntimeKey:
         return RuntimeKey(
@@ -285,9 +303,7 @@ class RuntimeRegistry:
                 "caption",
             )
             logger.info("Loading caption (VoiceDesign) runtime")
-            self._caption_runtime = InferenceRuntime.from_key(
-                self._make_key(str(caption_path))
-            )
+            self._caption_runtime = InferenceRuntime.from_key(self._make_key(str(caption_path)))
 
     def acquire(self, uuid: str) -> tuple[InferenceRuntime, SpeakerSpec]:
         spec = self.get_spec(uuid)
@@ -342,19 +358,23 @@ class VdsSynthOptions(BaseModel):
     speaker_kv_scale: float | None = Field(default=None, description="Speaker KV scale.")
     truncation_factor: float | None = Field(default=None, description="Noise truncation factor.")
     seconds: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Manual synthesis duration in seconds (overrides the duration predictor).",
     )
     min_seconds: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Lower bound for the duration predictor output (default 0.5).",
     )
     max_seconds: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Upper bound for the duration predictor output (default 30.0).",
     )
     duration_scale: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Multiplier applied to the predicted duration (default 1.0).",
     )
 
@@ -368,7 +388,8 @@ class VdsSpeechCue(BaseModel):
         description="Text to synthesize. Supports {shortcode} emoji annotations.",
     )
     options: VdsSynthOptions | None = Field(
-        default=None, description="Per-cue synthesis parameter overrides.",
+        default=None,
+        description="Per-cue synthesis parameter overrides.",
     )
 
 
@@ -390,29 +411,36 @@ VdsCue = Annotated[
 
 class VdsDefaults(BaseModel):
     gap: float = Field(
-        default=1.0, ge=0,
+        default=1.0,
+        ge=0,
         description="Gap between consecutive speech cues in seconds.",
     )
     num_steps: int | None = Field(default=None, description="Default RF sampling steps.")
     cfg_scale_text: float | None = Field(default=None, description="Default text CFG scale.")
     cfg_scale_speaker: float | None = Field(default=None, description="Default speaker CFG scale.")
     speaker_kv_scale: float | None = Field(default=None, description="Default speaker KV scale.")
-    truncation_factor: float | None = Field(default=None, description="Default noise truncation factor.")
+    truncation_factor: float | None = Field(
+        default=None, description="Default noise truncation factor."
+    )
     seed: int | None = Field(default=None, description="Default sampling seed.")
     seconds: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Default manual synthesis duration in seconds (overrides the predictor).",
     )
     min_seconds: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Default lower bound for the duration predictor output.",
     )
     max_seconds: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Default upper bound for the duration predictor output.",
     )
     duration_scale: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Default multiplier applied to the predicted duration.",
     )
 
@@ -478,21 +506,25 @@ class SynthRequest(BaseModel):
         "If provided, speaker_id/text/caption are ignored.",
     )
     seconds: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Manual synthesis duration in seconds. "
         "When set, overrides the duration predictor; clamped by min/max_seconds.",
     )
     min_seconds: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Lower bound for the duration predictor output. "
         "Default 0.5s. Useful when very short text yields too-short audio.",
     )
     max_seconds: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Upper bound for the duration predictor output. Default 30.0s.",
     )
     duration_scale: float | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description="Multiplier applied to the predicted duration. Default 1.0.",
     )
 
@@ -556,7 +588,10 @@ def _merge_defaults(req: SynthRequest, defaults: dict[str, Any]) -> dict[str, An
     return resolved
 
 
-def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
+# TODO: build_app is a 200-statement closure factory holding every route and the
+# whole synthesis path. Splitting it into a service object is tracked separately;
+# it needs smoke tests for /synth first, which this file has none of today.
+def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:  # noqa: C901, PLR0915
     cfg = load_config(cfg_path)
     registry = RuntimeRegistry(cfg)
 
@@ -591,7 +626,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             ]
         }
 
-    def _caption_sampling_req(
+    def _caption_sampling_req(  # noqa: PLR0913
         text: str,
         caption_text: str,
         *,
@@ -653,7 +688,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             tail_mean_threshold=cfg.tail_mean_threshold,
         )
 
-    def _synth_single(req: SynthRequest, request: Request) -> Response:
+    def _synth_single(req: SynthRequest, request: Request) -> Response:  # noqa: C901, PLR0915
         """Single-cue synthesis. Returns WAV by default, raw PCM16 mono when Accept: audio/pcm."""
         if not req.text:
             raise HTTPException(status_code=422, detail="'text' is required")
@@ -678,13 +713,24 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
                 ) from err
 
             num_steps = int(req.num_steps) if req.num_steps and req.num_steps > 0 else 40
-            cfg_text = float(req.cfg_scale_text) if req.cfg_scale_text and req.cfg_scale_text > 0 else 3.0
-            cfg_cap = float(req.cfg_scale_caption) if req.cfg_scale_caption and req.cfg_scale_caption > 0 else 3.0
-            trunc = req.truncation_factor if req.truncation_factor and req.truncation_factor > 0 else None
+            cfg_text = (
+                float(req.cfg_scale_text) if req.cfg_scale_text and req.cfg_scale_text > 0 else 3.0
+            )
+            cfg_cap = (
+                float(req.cfg_scale_caption)
+                if req.cfg_scale_caption and req.cfg_scale_caption > 0
+                else 3.0
+            )
+            trunc = (
+                req.truncation_factor
+                if req.truncation_factor and req.truncation_factor > 0
+                else None
+            )
             seed = req.seed if req.seed is not None and req.seed >= 0 else None
 
             sampling_req = _caption_sampling_req(
-                req.text, req.caption,
+                req.text,
+                req.caption,
                 num_steps=num_steps,
                 cfg_scale_text=cfg_text,
                 cfg_scale_caption=cfg_cap,
@@ -697,13 +743,19 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             )
 
             try:
-                result = runtime.synthesize(sampling_req, log_fn=logger.debug if cfg.show_timings else None)
+                result = runtime.synthesize(
+                    sampling_req, log_fn=logger.debug if cfg.show_timings else None
+                )
             except Exception as e:
                 logger.exception("caption synthesis failed")
                 raise HTTPException(status_code=500, detail=f"synthesis failed: {e}") from e
 
             audio = result.audio
-            audio_np = audio.squeeze(0).cpu().float().numpy() if audio.ndim == 2 else audio.cpu().float().numpy()
+            audio_np = (
+                audio.squeeze(0).cpu().float().numpy()
+                if audio.ndim == 2
+                else audio.cpu().float().numpy()
+            )
             audio_np = _apply_fade(audio_np, int(result.sample_rate))
             headers = {
                 "X-TTS-Used-Seed": str(int(result.used_seed)),
@@ -776,7 +828,9 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
         )
 
         try:
-            result = runtime.synthesize(sampling_req, log_fn=logger.debug if cfg.show_timings else None)
+            result = runtime.synthesize(
+                sampling_req, log_fn=logger.debug if cfg.show_timings else None
+            )
         except Exception as e:
             logger.exception("synthesis failed")
             raise HTTPException(status_code=500, detail=f"synthesis failed: {e}") from e
@@ -824,7 +878,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             return _render_drama(script, request)
         return _synth_single(req, request)
 
-    def _synth_cue(
+    def _synth_cue(  # noqa: C901, PLR0912, PLR0915
         cue: SpeechCue,
         script: VdsScript,
     ) -> tuple[np.ndarray, int]:
@@ -833,7 +887,9 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
 
         synth_defaults = script.defaults.synth
         cue_num_steps = int(synth_defaults.num_steps) if synth_defaults.num_steps else 40
-        cue_cfg_text = float(synth_defaults.cfg_scale_text) if synth_defaults.cfg_scale_text else 3.0
+        cue_cfg_text = (
+            float(synth_defaults.cfg_scale_text) if synth_defaults.cfg_scale_text else 3.0
+        )
         cue_trunc = synth_defaults.truncation_factor
         cue_seed: int | None = int(synth_defaults.seed) if synth_defaults.seed is not None else None
         cue_seconds = synth_defaults.seconds
@@ -861,7 +917,8 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
         if isinstance(ref, CaptionSpeaker):
             runtime = registry.acquire_caption()
             sampling_req = _caption_sampling_req(
-                cue.text, ref.caption,
+                cue.text,
+                ref.caption,
                 num_steps=cue_num_steps,
                 cfg_scale_text=cue_cfg_text,
                 cfg_scale_caption=3.0,
@@ -872,9 +929,15 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
                 max_seconds=float(cue_max_seconds) if cue_max_seconds is not None else 30.0,
                 duration_scale=float(cue_duration_scale) if cue_duration_scale is not None else 1.0,
             )
-            result = runtime.synthesize(sampling_req, log_fn=logger.debug if cfg.show_timings else None)
+            result = runtime.synthesize(
+                sampling_req, log_fn=logger.debug if cfg.show_timings else None
+            )
             audio = result.audio
-            audio_np = audio.squeeze(0).cpu().float().numpy() if audio.ndim == 2 else audio.cpu().float().numpy()
+            audio_np = (
+                audio.squeeze(0).cpu().float().numpy()
+                if audio.ndim == 2
+                else audio.cpu().float().numpy()
+            )
             return _apply_fade(audio_np, int(result.sample_rate)), int(result.sample_rate)
 
         # LoRA speaker path
@@ -886,18 +949,36 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             ) from err
 
         merged_defaults = dict(spec.defaults)
-        for key in ("num_steps", "cfg_scale_text", "cfg_scale_speaker",
-                     "speaker_kv_scale", "truncation_factor", "seed",
-                     "seconds", "min_seconds", "max_seconds", "duration_scale"):
+        for key in (
+            "num_steps",
+            "cfg_scale_text",
+            "cfg_scale_speaker",
+            "speaker_kv_scale",
+            "truncation_factor",
+            "seed",
+            "seconds",
+            "min_seconds",
+            "max_seconds",
+            "duration_scale",
+        ):
             val = getattr(synth_defaults, key, None)
             if val is not None:
                 merged_defaults[key] = val
 
         mock_req_fields: dict[str, Any] = {"speaker_id": ref.uuid, "text": cue.text}
         if cue.options:
-            for key in ("seed", "num_steps", "cfg_scale_text", "cfg_scale_speaker",
-                         "speaker_kv_scale", "truncation_factor",
-                         "seconds", "min_seconds", "max_seconds", "duration_scale"):
+            for key in (
+                "seed",
+                "num_steps",
+                "cfg_scale_text",
+                "cfg_scale_speaker",
+                "speaker_kv_scale",
+                "truncation_factor",
+                "seconds",
+                "min_seconds",
+                "max_seconds",
+                "duration_scale",
+            ):
                 val = getattr(cue.options, key, None)
                 if val is not None:
                     mock_req_fields[key] = val
@@ -956,7 +1037,11 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
 
         result = runtime.synthesize(sampling_req, log_fn=logger.debug if cfg.show_timings else None)
         audio = result.audio
-        audio_np = audio.squeeze(0).cpu().float().numpy() if audio.ndim == 2 else audio.cpu().float().numpy()
+        audio_np = (
+            audio.squeeze(0).cpu().float().numpy()
+            if audio.ndim == 2
+            else audio.cpu().float().numpy()
+        )
         return _apply_fade(audio_np, int(result.sample_rate)), int(result.sample_rate)
 
     def _to_pcm16(audio_np: np.ndarray) -> bytes:
@@ -1022,10 +1107,8 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
         return speech_cues
 
     def _get_sample_rate() -> int:
-        for rt in (registry._runtime, registry._caption_runtime):
-            if rt is not None:
-                return int(rt.codec.sample_rate)
-        return 24000
+        sr = registry.sample_rate
+        return sr if sr is not None else 24000
 
     def _render_drama_wav(script: VdsScript, speech_cues: list[SpeechCue]) -> Response:
         """Synthesize all cues and return a single concatenated WAV."""
@@ -1043,8 +1126,9 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
                 continue
             if isinstance(cue, SpeechCue):
                 if prev_was_speech and script.defaults.gap > 0 and sample_rate is not None:
-                    segments.append(np.zeros(int(script.defaults.gap * sample_rate),
-                                             dtype=np.float32))
+                    segments.append(
+                        np.zeros(int(script.defaults.gap * sample_rate), dtype=np.float32)
+                    )
                 try:
                     audio_np, sr = _synth_cue(cue, script)
                 except Exception:
@@ -1075,9 +1159,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
         accept = request.headers.get("accept", "")
         return "audio/wav" in accept
 
-    def _render_drama(
-        script: VdsScript, request: Request
-    ) -> Response:
+    def _render_drama(script: VdsScript, request: Request) -> Response:
         speech_cues = _validate_drama(script)
 
         if _wants_wav(request):
@@ -1106,9 +1188,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
             }
         },
     )
-    async def synth_vds(
-        file: UploadFile, request: Request
-    ) -> Response:
+    async def synth_vds(file: UploadFile, request: Request) -> Response:
         content = await file.read()
         try:
             source = content.decode("utf-8-sig")

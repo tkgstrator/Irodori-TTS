@@ -384,7 +384,10 @@ outputs/<speaker>_lora/
 
 ```python
 from safetensors import safe_open
-with safe_open("outputs/<speaker>_lora/checkpoint_0004000/adapter_model.safetensors", framework="pt") as f:
+
+with safe_open(
+    "outputs/<speaker>_lora/checkpoint_0004000/adapter_model.safetensors", framework="pt"
+) as f:
     print(f.metadata())
 ```
 

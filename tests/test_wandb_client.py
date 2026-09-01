@@ -35,7 +35,7 @@ class _StubRun:
         self.name = init_kwargs.get("name") or "stub-run"
         self.logged: list[tuple[dict[str, Any], int | None]] = []
         self.summary: dict[str, Any] = {}
-        self.finished_with: int | None | str = "<not-finished>"
+        self.finished_with: int | str | None = "<not-finished>"
 
     def log(self, data: dict[str, Any], *, step: int | None = None) -> None:
         self.logged.append((dict(data), step))
@@ -76,7 +76,7 @@ def test_disabled_client_is_inert(monkeypatch: pytest.MonkeyPatch) -> None:
     # All public methods must be no-ops without raising.
     client.log({"x": 1}, step=10)
     client.set_summary("k", "v")
-    assert client.Audio(b"\0\0", sample_rate=16000) is None
+    assert client.audio(b"\0\0", sample_rate=16000) is None
     client.finish(exit_code=0)
 
 
@@ -152,7 +152,7 @@ def test_log_audio_summary_finish_route_through_run(monkeypatch: pytest.MonkeyPa
     _, runs = _install_stub_wandb(monkeypatch)
     client = WandbClient(WandbConfig(enabled=True, project="irodori-tts"))
 
-    audio = client.Audio(b"\x00\x01", sample_rate=24000, caption="step=42")
+    audio = client.audio(b"\x00\x01", sample_rate=24000, caption="step=42")
     assert isinstance(audio, _StubAudio)
     assert audio.kwargs == {"sample_rate": 24000, "caption": "step=42"}
 

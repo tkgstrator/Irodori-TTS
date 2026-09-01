@@ -1,4 +1,5 @@
 """Periodic audio sample generation during training, with optional W&B logging."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -44,7 +45,7 @@ def load_codec_for_sampling(
     return codec
 
 
-def generate_training_samples(
+def generate_training_samples(  # noqa: PLR0913 -- keyword-only API called from train.py (out of scope here); grouping into a config object would require changing that call site too.
     *,
     raw_model: torch.nn.Module,
     model_cfg: ModelConfig,
@@ -119,7 +120,7 @@ def generate_training_samples(
 
             if wandb_active:
                 audio_np = audio.squeeze(0).numpy()
-                log_payload[f"samples/{prompt.name}"] = wandb_client.Audio(
+                log_payload[f"samples/{prompt.name}"] = wandb_client.audio(
                     audio_np,
                     sample_rate=sr,
                     caption=f"step={step}",

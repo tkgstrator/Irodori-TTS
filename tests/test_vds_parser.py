@@ -263,7 +263,7 @@ class TestParseTextErrors:
 
 a: hello
 """
-        with pytest.raises(ParseError, match="@version.*required"):
+        with pytest.raises(ParseError, match=r"@version.*required"):
             parse_text(source)
 
     def test_unsupported_version(self):
@@ -300,7 +300,7 @@ a:   \t
             parse_text(source)
 
     def test_unknown_directive(self):
-        with pytest.raises(ParseError, match="unknown directive.*@foo"):
+        with pytest.raises(ParseError, match=r"unknown directive.*@foo"):
             parse_text("@version: 1\n@foo: bar\n")
 
     def test_unknown_option_key(self):
@@ -310,7 +310,7 @@ a:   \t
 
 a [badkey=1]: hello
 """
-        with pytest.raises(ParseError, match="unknown option key.*badkey"):
+        with pytest.raises(ParseError, match=r"unknown option key.*badkey"):
             parse_text(source)
 
     def test_option_not_a_number(self):
@@ -529,7 +529,7 @@ class TestParseJsonWarnings:
 
 class TestParseJsonErrors:
     def test_missing_version(self):
-        with pytest.raises(ParseError, match="version.*required"):
+        with pytest.raises(ParseError, match=r"version.*required"):
             parse_json({"speakers": {}, "cues": []})
 
     def test_unsupported_version(self):
@@ -560,7 +560,7 @@ class TestParseJsonErrors:
             "speakers": {"a": {"type": "bad", "uuid": UUID_A}},
             "cues": [],
         }
-        with pytest.raises(ParseError, match="\"lora\" or \"caption\""):
+        with pytest.raises(ParseError, match='"lora" or "caption"'):
             parse_json(data)
 
     def test_missing_speaker_type(self):
@@ -569,7 +569,7 @@ class TestParseJsonErrors:
             "speakers": {"a": {"uuid": UUID_A}},
             "cues": [],
         }
-        with pytest.raises(ParseError, match="\"lora\" or \"caption\""):
+        with pytest.raises(ParseError, match='"lora" or "caption"'):
             parse_json(data)
 
     def test_extra_fields_in_cue(self):
@@ -596,7 +596,7 @@ class TestParseJsonErrors:
             "speakers": {},
             "cues": [{"kind": "bgm", "file": "music.mp3"}],
         }
-        with pytest.raises(ParseError, match="\"speech\", \"pause\", or \"scene\""):
+        with pytest.raises(ParseError, match='"speech", "pause", or "scene"'):
             parse_json(data)
 
     def test_pause_zero_duration(self):

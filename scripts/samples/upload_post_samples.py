@@ -14,11 +14,14 @@ Usage:
         --wandb-project irodori-tts-speaker-lora \\
         --wandb-run-id 63k8w8ee
 """
+
 from __future__ import annotations
 
 import argparse
 import gc
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 
@@ -54,18 +57,104 @@ def discover_checkpoints(output_dir: Path) -> list[tuple[str, Path]]:
     return [(label, path) for _, label, path in items]
 
 
-def main() -> None:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--base-checkpoint", required=True)
-    parser.add_argument("--config", required=True, help="Training YAML with sample_generation section")
+    parser.add_argument(
+        "--config", required=True, help="Training YAML with sample_generation section"
+    )
     parser.add_argument("--wandb-project", required=True)
     parser.add_argument("--wandb-run-id", required=True)
     parser.add_argument("--wandb-entity", default=None)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--codec-device", default="cuda")
     parser.add_argument("--dry-run", action="store_true", help="Skip W&B; only write local wavs")
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def init_wandb(args: argparse.Namespace):
+    if args.dry_run:
+        return None
+
+    import wandb
+
+    wandb_run = wandb.init(
+        project=args.wandb_project,
+        entity=args.wandb_entity,
+        id=args.wandb_run_id,
+        resume="must",
+    )
+    print(f"Resumed W&B run: {wandb_run.name} ({wandb_run.id})")
+    return wandb_run
+
+
+@dataclass
+class _RunConfig:
+    base_ckpt: Path
+    args: argparse.Namespace
+    sample_cfg: Any
+    samples_root: Path
+
+
+def process_checkpoint(label: str, ckpt_path: Path, run: _RunConfig, wandb_run) -> None:
+    args = run.args
+    sample_cfg = run.sample_cfg
+
+    print(f"\n=== {label} ===")
+    runtime = InferenceRuntime.from_base_with_adapters(
+        key=RuntimeKey(
+            checkpoint=str(run.base_ckpt),
+            model_device=args.device,
+            codec_device=args.codec_device,
+        ),
+        adapters={"lora": str(ckpt_path)},
+    )
+    local_dir = run.samples_root / label
+    local_dir.mkdir(parents=True, exist_ok=True)
+
+    log_payload: dict = {}
+    for prompt in sample_cfg.prompts:
+        req = SamplingRequest(
+            text=prompt.text,
+            caption=prompt.caption,
+            ref_wav=prompt.ref_wav,
+            no_ref=bool(prompt.no_ref),
+            num_candidates=1,
+            seconds=float(prompt.seconds),
+            num_steps=int(sample_cfg.num_steps),
+            cfg_scale_text=float(sample_cfg.cfg_scale_text),
+            cfg_scale_caption=float(sample_cfg.cfg_scale_caption),
+            cfg_scale_speaker=float(sample_cfg.cfg_scale_speaker),
+            cfg_guidance_mode=str(sample_cfg.cfg_guidance_mode),
+            seed=prompt.seed,
+        )
+        result = runtime.synthesize(req)
+        audio = result.audio.detach().to(torch.float32).cpu()
+        sr = int(result.sample_rate)
+        wav_path = local_dir / f"{prompt.name}.wav"
+        save_wav(wav_path, audio, sample_rate=sr)
+        print(f"  {prompt.name}: {wav_path}  ({result.total_to_decode:.2f}s)")
+        if wandb_run is not None:
+            import wandb
+
+            log_payload[f"samples_post/{label}/{prompt.name}"] = wandb.Audio(
+                audio.squeeze(0).numpy(),
+                sample_rate=sr,
+                caption=label,
+            )
+    if wandb_run is not None and log_payload:
+        wandb_run.log(log_payload)
+
+    runtime.unload()
+    del runtime
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def main() -> None:
+    args = parse_args()
 
     output_dir = Path(args.output_dir).resolve()
     base_ckpt = Path(args.base_checkpoint).resolve()
@@ -84,72 +173,16 @@ def main() -> None:
     for label, path in ckpts:
         print(f"  {label} -> {path.name}")
 
-    wandb_run = None
-    if not args.dry_run:
-        import wandb
-
-        wandb_run = wandb.init(
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            id=args.wandb_run_id,
-            resume="must",
-        )
-        print(f"Resumed W&B run: {wandb_run.name} ({wandb_run.id})")
+    wandb_run = init_wandb(args)
 
     samples_root = output_dir / "samples_post"
     samples_root.mkdir(parents=True, exist_ok=True)
 
+    run = _RunConfig(
+        base_ckpt=base_ckpt, args=args, sample_cfg=sample_cfg, samples_root=samples_root
+    )
     for label, ckpt_path in ckpts:
-        print(f"\n=== {label} ===")
-        runtime = InferenceRuntime.from_base_with_adapters(
-            key=RuntimeKey(
-                checkpoint=str(base_ckpt),
-                model_device=args.device,
-                codec_device=args.codec_device,
-            ),
-            adapters={"lora": str(ckpt_path)},
-        )
-        local_dir = samples_root / label
-        local_dir.mkdir(parents=True, exist_ok=True)
-
-        log_payload: dict = {}
-        for prompt in sample_cfg.prompts:
-            req = SamplingRequest(
-                text=prompt.text,
-                caption=prompt.caption,
-                ref_wav=prompt.ref_wav,
-                no_ref=bool(prompt.no_ref),
-                num_candidates=1,
-                seconds=float(prompt.seconds),
-                num_steps=int(sample_cfg.num_steps),
-                cfg_scale_text=float(sample_cfg.cfg_scale_text),
-                cfg_scale_caption=float(sample_cfg.cfg_scale_caption),
-                cfg_scale_speaker=float(sample_cfg.cfg_scale_speaker),
-                cfg_guidance_mode=str(sample_cfg.cfg_guidance_mode),
-                seed=prompt.seed,
-            )
-            result = runtime.synthesize(req)
-            audio = result.audio.detach().to(torch.float32).cpu()
-            sr = int(result.sample_rate)
-            wav_path = local_dir / f"{prompt.name}.wav"
-            save_wav(wav_path, audio, sample_rate=sr)
-            print(f"  {prompt.name}: {wav_path}  ({result.total_to_decode:.2f}s)")
-            if wandb_run is not None:
-                import wandb
-
-                log_payload[f"samples_post/{label}/{prompt.name}"] = wandb.Audio(
-                    audio.squeeze(0).numpy(),
-                    sample_rate=sr,
-                    caption=label,
-                )
-        if wandb_run is not None and log_payload:
-            wandb_run.log(log_payload)
-
-        runtime.unload()
-        del runtime
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        process_checkpoint(label, ckpt_path, run, wandb_run)
 
     if wandb_run is not None:
         wandb_run.finish()

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Trim leading/trailing silence, loudness-normalize, filter by duration, sequence-rename."""
+
 from __future__ import annotations
 
 import argparse
@@ -12,9 +13,10 @@ from tqdm import tqdm
 
 def probe_duration(path: Path) -> float:
     r = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", str(path)],
-        capture_output=True, text=True, check=True,
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return float(r.stdout.strip())
 
@@ -27,9 +29,19 @@ def process_one(src: Path, dst: Path, silence_db: float, lufs: float) -> float |
         f"aresample=44100"
     )
     cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-i", str(src), "-af", af,
-        "-c:a", "libvorbis", "-q:a", "5", str(dst),
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        "error",
+        "-i",
+        str(src),
+        "-af",
+        af,
+        "-c:a",
+        "libvorbis",
+        "-q:a",
+        "5",
+        str(dst),
     ]
     subprocess.run(cmd, check=True)
     try:
@@ -44,9 +56,10 @@ def _worker(args):
     tmp = Path(tmp_str)
     try:
         dur = process_one(src, tmp, silence_db, lufs)
-        return idx, src.name, tmp_str, dur
     except Exception:
         return idx, src.name, tmp_str, None
+    else:
+        return idx, src.name, tmp_str, dur
 
 
 def main() -> None:
@@ -76,11 +89,11 @@ def main() -> None:
         for i, f in enumerate(files)
     ]
 
-    results = []
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         futs = [ex.submit(_worker, j) for j in jobs]
-        for fut in tqdm(as_completed(futs), total=len(futs), desc="preprocess"):
-            results.append(fut.result())
+        results = [
+            fut.result() for fut in tqdm(as_completed(futs), total=len(futs), desc="preprocess")
+        ]
 
     results.sort(key=lambda r: r[0])
 
@@ -92,7 +105,7 @@ def main() -> None:
     mapping_path = dst / "_source_map.tsv"
     with mapping_path.open("w", encoding="utf-8") as mf:
         mf.write("seq\tsource\tduration\n")
-        for idx, orig, tmp_path, dur in results:
+        for _idx, orig, tmp_path, dur in results:
             if dur is None:
                 dropped_err += 1
                 continue

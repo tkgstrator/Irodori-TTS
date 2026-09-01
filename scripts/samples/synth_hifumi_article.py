@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Synthesize a multi-sentence Japanese passage with the hifumi LoRA and concatenate."""
+
 from __future__ import annotations
 
 import sys
@@ -49,7 +50,7 @@ def main() -> None:
     clips: list[torch.Tensor] = []
     sr: int | None = None
     for i, text in enumerate(SENTENCES):
-        print(f"[{i+1}/{len(SENTENCES)}] synth: {text[:40]}...")
+        print(f"[{i + 1}/{len(SENTENCES)}] synth: {text[:40]}...")
         result = runtime.synthesize(
             SamplingRequest(
                 text=text,

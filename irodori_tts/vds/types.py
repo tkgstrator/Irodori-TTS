@@ -73,38 +73,40 @@ class VdsScript:
         d: dict = {"version": self.version}
         if self.title is not None:
             d["title"] = self.title
-        defaults_d: dict = {}
-        if self.defaults.gap != 1.0:
-            defaults_d["gap"] = self.defaults.gap
-        for key in SYNTH_OPTION_KEYS:
-            val = getattr(self.defaults.synth, key)
-            if val is not None:
-                defaults_d[key] = val
+        defaults_d = _defaults_to_dict(self.defaults)
         if defaults_d:
             d["defaults"] = defaults_d
-        speakers_d: dict = {}
-        for alias, ref in self.speakers.items():
-            if isinstance(ref, LoraSpeaker):
-                speakers_d[alias] = {"type": "lora", "uuid": ref.uuid}
-            else:
-                speakers_d[alias] = {"type": "caption", "caption": ref.caption}
-        d["speakers"] = speakers_d
-        cues_list: list[dict] = []
-        for cue in self.cues:
-            if isinstance(cue, SpeechCue):
-                cue_d: dict = {"kind": "speech", "speaker": cue.speaker, "text": cue.text}
-                if cue.options is not None:
-                    opts_d: dict = {}
-                    for key in SYNTH_OPTION_KEYS:
-                        val = getattr(cue.options, key)
-                        if val is not None:
-                            opts_d[key] = val
-                    if opts_d:
-                        cue_d["options"] = opts_d
-                cues_list.append(cue_d)
-            elif isinstance(cue, PauseCue):
-                cues_list.append({"kind": "pause", "duration": cue.duration})
-            elif isinstance(cue, SceneCue):
-                cues_list.append({"kind": "scene", "name": cue.name})
-        d["cues"] = cues_list
+        d["speakers"] = {alias: _speaker_ref_to_dict(ref) for alias, ref in self.speakers.items()}
+        d["cues"] = [_cue_to_dict(cue) for cue in self.cues]
         return d
+
+
+def _synth_options_to_dict(options: SynthOptions) -> dict:
+    return {key: val for key in SYNTH_OPTION_KEYS if (val := getattr(options, key)) is not None}
+
+
+def _defaults_to_dict(defaults: Defaults) -> dict:
+    defaults_d: dict = {}
+    if defaults.gap != 1.0:
+        defaults_d["gap"] = defaults.gap
+    defaults_d.update(_synth_options_to_dict(defaults.synth))
+    return defaults_d
+
+
+def _speaker_ref_to_dict(ref: SpeakerRef) -> dict:
+    if isinstance(ref, LoraSpeaker):
+        return {"type": "lora", "uuid": ref.uuid}
+    return {"type": "caption", "caption": ref.caption}
+
+
+def _cue_to_dict(cue: Cue) -> dict:
+    if isinstance(cue, SpeechCue):
+        cue_d: dict = {"kind": "speech", "speaker": cue.speaker, "text": cue.text}
+        if cue.options is not None:
+            opts_d = _synth_options_to_dict(cue.options)
+            if opts_d:
+                cue_d["options"] = opts_d
+        return cue_d
+    if isinstance(cue, PauseCue):
+        return {"kind": "pause", "duration": cue.duration}
+    return {"kind": "scene", "name": cue.name}
