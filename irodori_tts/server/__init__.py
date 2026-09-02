@@ -27,6 +27,21 @@ from irodori_tts.server.schemas import (
     VdsSynthOptions,
     _merge_defaults,
 )
+from irodori_tts.server.synthesis import (
+    _caption_sampling_req,
+    _get_sample_rate,
+    _handle_synth,
+    _handle_synth_vds,
+    _render_drama,
+    _render_drama_wav,
+    _silence_pcm,
+    _stream_drama_pcm,
+    _synth_cue,
+    _synth_single,
+    _to_pcm16,
+    _validate_drama,
+    _wants_wav,
+)
 
 __all__ = [
     "RuntimeRegistry",
