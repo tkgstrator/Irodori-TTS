@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
 import random
 import sys
 import uuid as _uuid
@@ -29,7 +28,6 @@ from irodori_tts.config import (
 from irodori_tts.dataset import LatentTextDataset, TTSCollator, _ManifestIndex
 from irodori_tts.duration import set_duration_has_speaker_feature
 from irodori_tts.lora import (
-    LORA_TARGET_PRESETS,
     apply_lora,
     count_parameters,
     is_lora_adapter_dir,
@@ -74,6 +72,12 @@ from irodori_tts.training.checkpointing import (
     prune_best_val_loss_checkpoints,
     save_checkpoint,
 )
+from irodori_tts.training.cli_args import (
+    TRAIN_MODES,
+    WANDB_MODES,
+    build_parser,
+    cli_provided,
+)
 from irodori_tts.training.distributed import (
     cuda_prefetch_batches,
     reduce_mean,
@@ -98,7 +102,6 @@ from irodori_tts.training.model_init import (
     build_text_tokenizer,
     clear_non_caption_grads,
     clear_non_pretrained_projector_grads,
-    cli_provided,
     freeze_for_duration_only,
     freeze_for_speaker_inversion,
     validate_caption_backbone_dim,
@@ -117,8 +120,6 @@ from irodori_tts.training.speaker_prompts import (
 )
 from irodori_tts.training.validation import run_validation
 
-WANDB_MODES = {"online", "offline", "disabled"}
-TRAIN_MODES = {"rf", "duration_only"}
 # DACVAE latent frame rate (Hz). Used for seconds<->frames conversion for
 # reference audio concat length ranges.
 _CODEC_FRAMES_PER_SECOND = 25
@@ -130,406 +131,14 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Train Irodori-TTS.")
-    parser.add_argument(
-        "--config",
-        required=True,
-        help="YAML config path containing model/train settings.",
-    )
-    parser.add_argument(
-        "--manifest",
-        required=True,
-        help="JSONL manifest with text+latent_path (optional speaker_id for reference sampling).",
-    )
-    parser.add_argument("--output-dir", default="outputs/irodori_tts")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument(
-        "--precision",
-        choices=["fp32", "bf16"],
-        default="bf16",
-        help=(
-            "Compute precision for model forward pass. "
-            "Model weights and optimizer states remain FP32."
-        ),
-    )
-    parser.add_argument(
-        "--tf32",
-        dest="allow_tf32",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable TF32 matmul/cuDNN kernels on CUDA for speed.",
-    )
-    parser.add_argument(
-        "--compile-model",
-        dest="compile_model",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable torch.compile for the training model.",
-    )
-    parser.add_argument(
-        "--gradient-checkpointing",
-        dest="gradient_checkpointing",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable activation checkpointing on diffusion blocks to reduce memory.",
-    )
-    parser.add_argument(
-        "--train-mode",
-        choices=sorted(TRAIN_MODES),
-        default=None,
-        help="Training objective: rf runs DiT/RF training; duration_only trains only the duration predictor.",
-    )
-    parser.add_argument(
-        "--resume",
-        default=None,
-        help="Resume full training state from a training checkpoint (.pt or LoRA checkpoint dir).",
-    )
-    parser.add_argument(
-        "--init-checkpoint",
-        default=None,
-        help=(
-            "Initialize model weights from a checkpoint (.pt or .safetensors) and start a new run "
-            "with fresh optimizer / scheduler state."
-        ),
-    )
-    parser.add_argument("--max-steps", type=int, default=200000)
-    parser.add_argument(
-        "--max-epochs",
-        type=int,
-        default=None,
-        help="Stop after this many epochs. Overrides --max-steps by computing steps = ceil(epochs * batches_per_epoch / grad_accum).",
-    )
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument(
-        "--gradient-accumulation-steps",
-        type=int,
-        default=1,
-        help=(
-            "Number of micro-batches to accumulate before optimizer.step(). "
-            "1 disables accumulation."
-        ),
-    )
-    parser.add_argument(
-        "--max-text-len",
-        type=int,
-        default=256,
-        help="Maximum token length for text conditioning (right-truncated).",
-    )
-    parser.add_argument(
-        "--max-caption-len",
-        type=int,
-        default=None,
-        help="Maximum token length for caption conditioning (defaults to max_text_len).",
-    )
-    parser.add_argument("--num-workers", type=int, default=2)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument(
-        "--pretrained-text-encoder-learning-rate",
-        type=float,
-        default=1e-5,
-        help=(
-            "AdamW learning rate for a trainable pretrained text/caption backbone. "
-            "The main scheduler multiplier is applied to this LR as well."
-        ),
-    )
-    parser.add_argument("--weight-decay", type=float, default=0.01)
-    parser.add_argument("--optimizer", choices=["adamw", "muon"], default="muon")
-    parser.add_argument("--adam-beta1", type=float, default=0.9)
-    parser.add_argument("--adam-beta2", type=float, default=0.999)
-    parser.add_argument("--adam-eps", type=float, default=1e-8)
-    parser.add_argument("--muon-momentum", type=float, default=0.95)
-    parser.add_argument("--lr-scheduler", choices=["none", "cosine", "wsd"], default="none")
-    parser.add_argument("--warmup-steps", type=int, default=0)
-    parser.add_argument(
-        "--caption-warmup",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "During the first caption_warmup_steps optimizer steps, update only caption-only parameters "
-            "(caption encoder/norm and caption attention projections)."
-        ),
-    )
-    parser.add_argument(
-        "--caption-warmup-steps",
-        type=int,
-        default=0,
-        help="Number of optimizer steps to run caption-only warmup for when caption_warmup is enabled.",
-    )
-    parser.add_argument(
-        "--pretrained-projector-warmup-steps",
-        type=int,
-        default=0,
-        help=(
-            "Update only the text/caption projectors for this many initial optimizer "
-            "steps, then update the rest of the trainable TTS model and backbone."
-        ),
-    )
-    parser.add_argument("--stable-steps", type=int, default=0)
-    parser.add_argument(
-        "--warmup-ratio",
-        type=float,
-        default=None,
-        help="If set, warmup_steps = round(max_steps * warmup_ratio). Computed after max_epochs resolves max_steps.",
-    )
-    parser.add_argument(
-        "--decay-ratio",
-        type=float,
-        default=None,
-        help="If set, decay length = round(max_steps * decay_ratio) for WSD scheduler.",
-    )
-    parser.add_argument("--min-lr-scale", type=float, default=0.1)
-    parser.add_argument("--latent-dim", type=int, default=128)
-    parser.add_argument("--latent-patch-size", type=int, default=1)
-    parser.add_argument("--max-latent-steps", type=int, default=750)
-    parser.add_argument(
-        "--ref-min-seconds",
-        type=float,
-        default=1.0,
-        help=(
-            "Minimum reference-audio length (seconds) sampled per training step "
-            "when concatenating same-speaker clips to build a long reference."
-        ),
-    )
-    parser.add_argument(
-        "--ref-max-seconds",
-        type=float,
-        default=120.0,
-        help=(
-            "Maximum reference-audio length (seconds). Concat is capped here, "
-            "and the sampled target length is drawn from [min, max]."
-        ),
-    )
-    parser.add_argument(
-        "--fixed-target-latent-steps",
-        type=int,
-        default=None,
-        help=(
-            "If set, always train on this fixed target latent length "
-            "(short samples are right-padded with zeros, long samples are truncated)."
-        ),
-    )
-    parser.add_argument(
-        "--fixed-target-full-mask",
-        action="store_true",
-        help="Use full target mask for fixed-length training (Echo-style includes padded tail in loss).",
-    )
-    parser.add_argument(
-        "--rf-loss-mode",
-        choices=["echo", "utterance_mean"],
-        default=None,
-        help="RF loss normalization mode.",
-    )
-    parser.add_argument("--duration-loss-weight", type=float, default=None)
-    parser.add_argument(
-        "--duration-backprop-to-condition",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "Allow joint RF+duration loss to update text/caption projectors and speaker "
-            "conditioning through the duration predictor."
-        ),
-    )
-    parser.add_argument("--duration-speaker-dropout", type=float, default=None)
-    parser.add_argument("--duration-caption-dropout", type=float, default=None)
-    parser.add_argument("--duration-huber-delta", type=float, default=None)
-    parser.add_argument(
-        "--text-condition-dropout",
-        type=float,
-        default=0.1,
-        help="Probability of dropping text conditioning during training.",
-    )
-    parser.add_argument(
-        "--caption-condition-dropout",
-        type=float,
-        default=0.1,
-        help="Probability of dropping caption conditioning during training.",
-    )
-    parser.add_argument(
-        "--speaker-condition-dropout",
-        type=float,
-        default=0.1,
-        help="Probability of dropping speaker/reference conditioning during training.",
-    )
-    speaker_inversion_group = parser.add_mutually_exclusive_group()
-    speaker_inversion_group.add_argument(
-        "--speaker-inversion",
-        dest="speaker_inversion_enabled",
-        action="store_true",
-        help="Train only learned speaker inversion embedding tokens.",
-    )
-    speaker_inversion_group.add_argument(
-        "--no-speaker-inversion",
-        dest="speaker_inversion_enabled",
-        action="store_false",
-        help="Disable Speaker Inversion training.",
-    )
-    parser.set_defaults(speaker_inversion_enabled=None)
-    parser.add_argument(
-        "--speaker-inversion-tokens",
-        type=int,
-        default=None,
-        help="Number of learned Speaker Inversion tokens.",
-    )
-    parser.add_argument(
-        "--speaker-inversion-init-std",
-        type=float,
-        default=None,
-        help="Stddev for random Speaker Inversion token initialization.",
-    )
-    parser.add_argument(
-        "--speaker-inversion-init-embedding",
-        default=None,
-        help=("Optional existing Speaker Inversion .speaker.safetensors file to continue from."),
-    )
-    parser.add_argument(
-        "--timestep-stratified",
-        action="store_true",
-        help="Use stratified logit-normal timestep sampling (Echo-style).",
-    )
-    parser.add_argument("--log-every", type=int, default=100)
-    parser.add_argument("--save-every", type=int, default=1000)
-    parser.add_argument(
-        "--checkpoint-best-n",
-        type=int,
-        default=0,
-        help=(
-            "Keep up to N best validation-loss checkpoints in addition to latest. "
-            "When validation is disabled, keeps latest N+1 periodic checkpoints. "
-            "Set 0 to disable checkpoint-count limiting."
-        ),
-    )
-    parser.add_argument(
-        "--valid-ratio",
-        type=float,
-        default=0.0,
-        help=("Split ratio for validation set from the single manifest. 0 disables validation."),
-    )
-    parser.add_argument(
-        "--valid-every",
-        type=int,
-        default=0,
-        help=("Run validation every N training steps. Set <=0 to disable validation."),
-    )
-    parser.add_argument(
-        "--progress",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable tqdm progress bar.",
-    )
-    parser.add_argument(
-        "--progress-all",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Show tqdm progress bars for all ranks in DDP mode (default: rank0 only).",
-    )
-    wandb_group = parser.add_mutually_exclusive_group()
-    wandb_group.add_argument(
-        "--wandb",
-        dest="wandb_enabled",
-        action="store_true",
-        help="Enable Weights & Biases logging.",
-    )
-    wandb_group.add_argument(
-        "--no-wandb",
-        dest="wandb_enabled",
-        action="store_false",
-        help="Disable Weights & Biases logging.",
-    )
-    parser.set_defaults(wandb_enabled=None)
-    parser.add_argument(
-        "--wandb-project",
-        default=None,
-        help="Weights & Biases project name.",
-    )
-    parser.add_argument(
-        "--wandb-entity",
-        default=None,
-        help="Weights & Biases entity/team name.",
-    )
-    parser.add_argument(
-        "--wandb-run-name",
-        default=None,
-        help="Weights & Biases run name.",
-    )
-    parser.add_argument(
-        "--wandb-mode",
-        choices=sorted(WANDB_MODES),
-        default=None,
-        help="Weights & Biases mode.",
-    )
-    lora_group = parser.add_mutually_exclusive_group()
-    lora_group.add_argument(
-        "--lora",
-        dest="lora_enabled",
-        action="store_true",
-        help="Enable PEFT LoRA fine-tuning.",
-    )
-    lora_group.add_argument(
-        "--no-lora",
-        dest="lora_enabled",
-        action="store_false",
-        help="Disable PEFT LoRA fine-tuning.",
-    )
-    parser.set_defaults(lora_enabled=None)
-    parser.add_argument("--lora-r", type=int, default=None, help="LoRA rank.")
-    parser.add_argument("--lora-alpha", type=int, default=None, help="LoRA alpha scaling.")
-    parser.add_argument(
-        "--lora-dropout",
-        type=float,
-        default=None,
-        help="LoRA dropout probability.",
-    )
-    parser.add_argument(
-        "--lora-bias",
-        choices=["none", "all", "lora_only"],
-        default=None,
-        help="Bias handling passed to PEFT LoRA.",
-    )
-    parser.add_argument(
-        "--lora-target-modules",
-        default=None,
-        help=(
-            "LoRA target preset, regex, or comma-separated module suffix list. "
-            f"Presets: {', '.join(sorted(LORA_TARGET_PRESETS))}."
-        ),
-    )
-    parser.add_argument(
-        "--lora-modules-to-save",
-        default=None,
-        help=(
-            "Comma-separated full modules to keep trainable and save inside the LoRA adapter. "
-            "Use 'auto' to save duration_predictor for duration-enabled models, or 'none' to disable."
-        ),
-    )
-    parser.add_argument("--seed", type=int, default=0)
-    ddp_group = parser.add_mutually_exclusive_group()
-    ddp_group.add_argument(
-        "--ddp-find-unused-parameters",
-        dest="ddp_find_unused_parameters",
-        action="store_true",
-        help=(
-            "Enable DDP find_unused_parameters. Useful when conditional branches "
-            "(e.g., speaker/text conditioning) may be fully masked in some steps."
-        ),
-    )
-    ddp_group.add_argument(
-        "--no-ddp-find-unused-parameters",
-        dest="ddp_find_unused_parameters",
-        action="store_false",
-        help="Disable DDP find_unused_parameters.",
-    )
-    parser.set_defaults(ddp_find_unused_parameters=None)
-    args = parser.parse_args()
-    if args.resume is not None and Path(args.resume).suffix.lower() == ".safetensors":
-        raise ValueError(
-            "--resume expects a training checkpoint (.pt or LoRA checkpoint dir). "
-            "Use --init-checkpoint for inference-only .safetensors weights."
-        )
-
-    rank, world_size, local_rank, distributed, device = setup_distributed(args.device)
-    is_main_process = rank == 0
-
+def _resolve_configs(
+    *,
+    args,
+    device,
+    distributed,
+    is_main_process,
+    rank,
+) -> tuple:
     raw_argv = sys.argv[1:]
     exp_cfg = load_config_yaml(args.config) if args.config else {}
     unknown_root = sorted(set(exp_cfg) - {"model", "train", "sample_generation"})
@@ -1116,8 +725,29 @@ def main() -> None:
         print(f"Compute precision={train_cfg.precision} (weights/optimizer states kept in fp32).")
     if distributed:
         dist.barrier()
-    if is_main_process and distributed:
-        print(f"DDP enabled: world_size={world_size} (local_rank={local_rank})")
+    return (
+        exp_cfg,
+        model_cfg,
+        output_dir,
+        resume_base_init,
+        resume_model_cfg,
+        resume_path,
+        resume_text_encoder_config,
+        sample_cfg,
+        train_cfg,
+        use_bf16,
+    )
+
+
+def _setup_wandb_and_tokenizers(
+    *,
+    args,
+    distributed,
+    is_main_process,
+    model_cfg,
+    output_dir,
+    train_cfg,
+) -> tuple:
     from irodori_tts.wandb_client import WandbClient
     from irodori_tts.wandb_client import from_env as _wandb_cfg_from_env
 
@@ -1213,6 +843,29 @@ def main() -> None:
                 f"Caption tokenizer={model_cfg.caption_tokenizer_repo_resolved} vocab={caption_tokenizer.vocab_size} add_bos={model_cfg.caption_add_bos_resolved} padding_side=right "
                 f"(pretrained hidden_size={caption_hidden_size})."
             )
+    return (
+        caption_tokenizer,
+        run_uuid,
+        tokenizer,
+        wandb_client,
+    )
+
+
+def _build_data(
+    *,
+    caption_tokenizer,
+    device,
+    distributed,
+    is_main_process,
+    model_cfg,
+    output_dir,
+    rank,
+    run_uuid,
+    tokenizer,
+    train_cfg,
+    wandb_client,
+    world_size,
+) -> tuple:
     manifest_index = _ManifestIndex.build(
         manifest_path=Path(train_cfg.manifest_path),
         show_progress=bool(train_cfg.progress and is_main_process),
@@ -1498,7 +1151,43 @@ def main() -> None:
             print(
                 f"Checkpoint retention: validation disabled, keep latest {periodic_checkpoint_keep} periodic checkpoints."
             )
+    return (
+        best_val_checkpoints,
+        checkpoint_retention_enabled,
+        has_validation,
+        loader,
+        manifest_size,
+        optim_steps_per_epoch,
+        periodic_checkpoint_keep,
+        run_name,
+        speaker_name,
+        train_cfg,
+        train_dataset,
+        train_sampler,
+        valid_loader,
+    )
 
+
+def _build_model(
+    *,
+    args,
+    device,
+    distributed,
+    exp_cfg,
+    is_main_process,
+    loader,
+    local_rank,
+    model_cfg,
+    rank,
+    resume_base_init,
+    resume_model_cfg,
+    resume_path,
+    resume_text_encoder_config,
+    train_cfg,
+    train_dataset,
+    train_sampler,
+    world_size,
+) -> tuple:
     if not (0.0 <= train_cfg.lora_dropout <= 1.0):
         raise ValueError(f"lora_dropout must be in [0, 1], got {train_cfg.lora_dropout}")
     if train_cfg.lora_r <= 0:
@@ -1793,56 +1482,67 @@ def main() -> None:
                 )
             else:
                 print("Restored dataloader state for mid-epoch resume.")
-
-    sampling_codec = None
-    if sample_cfg.enabled and is_main_process and sample_cfg.prompts:
-        from irodori_tts.training_samples import load_codec_for_sampling
-
-        sampling_codec = load_codec_for_sampling(
-            sample_cfg,
-            expected_latent_dim=model_cfg.latent_dim,
-        )
-        print(
-            f"Sample generation enabled: every={sample_cfg.every} prompts={len(sample_cfg.prompts)} "
-            f"codec_device={sample_cfg.codec_device}"
-        )
-    elif sample_cfg.enabled and is_main_process and not sample_cfg.prompts:
-        print("warning: sample_generation.enabled=true but prompts list is empty; disabling.")
-
-    last_sampled_step: list[int] = [-1]
-
-    def _maybe_emit_samples(current_step: int) -> None:
-        if sampling_codec is None:
-            return
-        if current_step == last_sampled_step[0]:
-            return
-        last_sampled_step[0] = current_step
-        from irodori_tts.training_samples import generate_training_samples
-
-        generate_training_samples(
-            raw_model=raw_model,
-            model_cfg=model_cfg,
-            train_cfg=train_cfg,
-            sample_cfg=sample_cfg,
-            tokenizer=tokenizer,
-            caption_tokenizer=caption_tokenizer,
-            codec=sampling_codec,
-            model_device=device,
-            step=current_step,
-            output_dir=output_dir,
-            wandb_client=wandb_client,
-            log_fn=lambda msg: progress.write(msg) if progress is not None else None,
-        )
-
-    progress = TrainProgress(
-        max_steps=train_cfg.max_steps,
-        start_step=step,
-        rank=rank,
-        world_size=world_size,
-        enabled=train_cfg.progress,
-        show_all_ranks=train_cfg.progress_all_ranks,
-        description="Train Duration" if train_cfg.train_mode == "duration_only" else "Train RF",
+    return (
+        base_init,
+        ckpt,
+        dataloader_state,
+        model,
+        optimizer,
+        progress,
+        raw_model,
+        resume_epoch,
+        resume_loader_state_loaded,
+        resumed_es_best_val,
+        resumed_es_no_improve,
+        runtime_state,
+        scheduler,
+        step,
     )
+
+
+def _run_training_loop(
+    *,
+    _maybe_emit_samples,
+    args,
+    base_init,
+    best_val_checkpoints,
+    checkpoint_retention_enabled,
+    ckpt,
+    dataloader_state,
+    device,
+    distributed,
+    has_validation,
+    is_main_process,
+    loader,
+    manifest_size,
+    model,
+    model_cfg,
+    optim_steps_per_epoch,
+    optimizer,
+    output_dir,
+    periodic_checkpoint_keep,
+    progress,
+    rank,
+    raw_model,
+    resume_epoch,
+    resume_loader_state_loaded,
+    resumed_es_best_val,
+    resumed_es_no_improve,
+    run_name,
+    run_uuid,
+    runtime_state,
+    sample_cfg,
+    sampling_codec,
+    scheduler,
+    speaker_name,
+    step,
+    train_cfg,
+    train_sampler,
+    use_bf16,
+    valid_loader,
+    wandb_client,
+    world_size,
+) -> None:
     accum_steps = int(train_cfg.gradient_accumulation_steps)
     global_batch_size = train_cfg.batch_size * world_size * accum_steps
     duration_only = train_cfg.train_mode == "duration_only"
@@ -2635,6 +2335,208 @@ def main() -> None:
         wandb_client.finish()
         if distributed and dist.is_initialized():
             dist.destroy_process_group()
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.resume is not None and Path(args.resume).suffix.lower() == ".safetensors":
+        raise ValueError(
+            "--resume expects a training checkpoint (.pt or LoRA checkpoint dir). "
+            "Use --init-checkpoint for inference-only .safetensors weights."
+        )
+
+    rank, world_size, local_rank, distributed, device = setup_distributed(args.device)
+    is_main_process = rank == 0
+
+    (
+        exp_cfg,
+        model_cfg,
+        output_dir,
+        resume_base_init,
+        resume_model_cfg,
+        resume_path,
+        resume_text_encoder_config,
+        sample_cfg,
+        train_cfg,
+        use_bf16,
+    ) = _resolve_configs(
+        args=args,
+        device=device,
+        distributed=distributed,
+        is_main_process=is_main_process,
+        rank=rank,
+    )
+    if is_main_process and distributed:
+        print(f"DDP enabled: world_size={world_size} (local_rank={local_rank})")
+    (
+        caption_tokenizer,
+        run_uuid,
+        tokenizer,
+        wandb_client,
+    ) = _setup_wandb_and_tokenizers(
+        args=args,
+        distributed=distributed,
+        is_main_process=is_main_process,
+        model_cfg=model_cfg,
+        output_dir=output_dir,
+        train_cfg=train_cfg,
+    )
+    (
+        best_val_checkpoints,
+        checkpoint_retention_enabled,
+        has_validation,
+        loader,
+        manifest_size,
+        optim_steps_per_epoch,
+        periodic_checkpoint_keep,
+        run_name,
+        speaker_name,
+        train_cfg,
+        train_dataset,
+        train_sampler,
+        valid_loader,
+    ) = _build_data(
+        caption_tokenizer=caption_tokenizer,
+        device=device,
+        distributed=distributed,
+        is_main_process=is_main_process,
+        model_cfg=model_cfg,
+        output_dir=output_dir,
+        rank=rank,
+        run_uuid=run_uuid,
+        tokenizer=tokenizer,
+        train_cfg=train_cfg,
+        wandb_client=wandb_client,
+        world_size=world_size,
+    )
+
+    (
+        base_init,
+        ckpt,
+        dataloader_state,
+        model,
+        optimizer,
+        progress,
+        raw_model,
+        resume_epoch,
+        resume_loader_state_loaded,
+        resumed_es_best_val,
+        resumed_es_no_improve,
+        runtime_state,
+        scheduler,
+        step,
+    ) = _build_model(
+        args=args,
+        device=device,
+        distributed=distributed,
+        exp_cfg=exp_cfg,
+        is_main_process=is_main_process,
+        loader=loader,
+        local_rank=local_rank,
+        model_cfg=model_cfg,
+        rank=rank,
+        resume_base_init=resume_base_init,
+        resume_model_cfg=resume_model_cfg,
+        resume_path=resume_path,
+        resume_text_encoder_config=resume_text_encoder_config,
+        train_cfg=train_cfg,
+        train_dataset=train_dataset,
+        train_sampler=train_sampler,
+        world_size=world_size,
+    )
+
+    sampling_codec = None
+    if sample_cfg.enabled and is_main_process and sample_cfg.prompts:
+        from irodori_tts.training_samples import load_codec_for_sampling
+
+        sampling_codec = load_codec_for_sampling(
+            sample_cfg,
+            expected_latent_dim=model_cfg.latent_dim,
+        )
+        print(
+            f"Sample generation enabled: every={sample_cfg.every} prompts={len(sample_cfg.prompts)} "
+            f"codec_device={sample_cfg.codec_device}"
+        )
+    elif sample_cfg.enabled and is_main_process and not sample_cfg.prompts:
+        print("warning: sample_generation.enabled=true but prompts list is empty; disabling.")
+
+    last_sampled_step: list[int] = [-1]
+
+    def _maybe_emit_samples(current_step: int) -> None:
+        if sampling_codec is None:
+            return
+        if current_step == last_sampled_step[0]:
+            return
+        last_sampled_step[0] = current_step
+        from irodori_tts.training_samples import generate_training_samples
+
+        generate_training_samples(
+            raw_model=raw_model,
+            model_cfg=model_cfg,
+            train_cfg=train_cfg,
+            sample_cfg=sample_cfg,
+            tokenizer=tokenizer,
+            caption_tokenizer=caption_tokenizer,
+            codec=sampling_codec,
+            model_device=device,
+            step=current_step,
+            output_dir=output_dir,
+            wandb_client=wandb_client,
+            log_fn=lambda msg: progress.write(msg) if progress is not None else None,
+        )
+
+    progress = TrainProgress(
+        max_steps=train_cfg.max_steps,
+        start_step=step,
+        rank=rank,
+        world_size=world_size,
+        enabled=train_cfg.progress,
+        show_all_ranks=train_cfg.progress_all_ranks,
+        description="Train Duration" if train_cfg.train_mode == "duration_only" else "Train RF",
+    )
+    _run_training_loop(
+        _maybe_emit_samples=_maybe_emit_samples,
+        args=args,
+        base_init=base_init,
+        best_val_checkpoints=best_val_checkpoints,
+        checkpoint_retention_enabled=checkpoint_retention_enabled,
+        ckpt=ckpt,
+        dataloader_state=dataloader_state,
+        device=device,
+        distributed=distributed,
+        has_validation=has_validation,
+        is_main_process=is_main_process,
+        loader=loader,
+        manifest_size=manifest_size,
+        model=model,
+        model_cfg=model_cfg,
+        optim_steps_per_epoch=optim_steps_per_epoch,
+        optimizer=optimizer,
+        output_dir=output_dir,
+        periodic_checkpoint_keep=periodic_checkpoint_keep,
+        progress=progress,
+        rank=rank,
+        raw_model=raw_model,
+        resume_epoch=resume_epoch,
+        resume_loader_state_loaded=resume_loader_state_loaded,
+        resumed_es_best_val=resumed_es_best_val,
+        resumed_es_no_improve=resumed_es_no_improve,
+        run_name=run_name,
+        run_uuid=run_uuid,
+        runtime_state=runtime_state,
+        sample_cfg=sample_cfg,
+        sampling_codec=sampling_codec,
+        scheduler=scheduler,
+        speaker_name=speaker_name,
+        step=step,
+        train_cfg=train_cfg,
+        train_sampler=train_sampler,
+        use_bf16=use_bf16,
+        valid_loader=valid_loader,
+        wandb_client=wandb_client,
+        world_size=world_size,
+    )
 
 
 if __name__ == "__main__":

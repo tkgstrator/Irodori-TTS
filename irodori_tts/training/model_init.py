@@ -20,6 +20,7 @@ from irodori_tts.config import ModelConfig, TrainConfig, merge_dataclass_overrid
 from irodori_tts.lora import LORA_TRAIN_CONFIG_FIELDS
 from irodori_tts.model import TextToLatentRFDiT
 from irodori_tts.tokenizer import PretrainedTextTokenizer
+from irodori_tts.training.cli_args import _lora_field_cli_explicit
 
 SAFETENSORS_CONFIG_META_KEY = "config_json"
 SAFETENSORS_TEXT_ENCODER_CONFIG_META_KEY = "text_encoder_config_json"
@@ -29,10 +30,6 @@ SAFETENSORS_INFERENCE_CONFIG_KEYS = {
     "fixed_target_latent_steps",
     "ref_max_seconds",
 }
-
-
-def cli_provided(argv: list[str], flag: str) -> bool:
-    return any(x == flag or x.startswith(flag + "=") for x in argv)
 
 
 def build_condition_tokenizer(
@@ -771,13 +768,6 @@ def validate_checkpoint_upgrade_partial_load(  # noqa: PLR0913
 
 def _normalize_checkpoint_path(path: str | Path) -> Path:
     return Path(os.path.abspath(str(Path(path).expanduser())))  # noqa: PTH100
-
-
-def _lora_field_cli_explicit(field: str, args: argparse.Namespace, raw_argv: list[str]) -> bool:
-    if field == "lora_enabled":
-        return args.lora_enabled is not None
-    flag = "--" + field.replace("_", "-")
-    return cli_provided(raw_argv, flag)
 
 
 def _restore_resume_lora_config(
