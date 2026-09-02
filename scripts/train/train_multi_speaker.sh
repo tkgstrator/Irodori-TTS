@@ -217,12 +217,28 @@ run_queue() {
 
     # shellcheck disable=SC2206
     local extra=(${EXTRA_TRAIN_ARGS:-})
+
+    # Budget steps by dataset size. A fixed step count overtrains the small
+    # speakers badly: at 74 clips a run is already 60 epochs deep after 30
+    # steps. Scale by epochs instead, clamped so the tiny sets still get a
+    # real run and the big ones do not run away. Set STEPS_PER_EPOCH_TARGET=0
+    # to opt out and rely on --max-steps from EXTRA_TRAIN_ARGS.
+    local epochs="${TARGET_EPOCHS:-40}"
+    if [ "${epochs}" != "0" ] && [[ ! " ${extra[*]} " == *" --max-steps "* ]]; then
+      local eff_batch="${EFFECTIVE_BATCH:-80}"
+      local scaled=$(( manifest_size * epochs / eff_batch ))
+      [ "${scaled}" -lt "${MIN_STEPS:-500}" ] && scaled="${MIN_STEPS:-500}"
+      [ "${scaled}" -gt "${MAX_STEPS_CAP:-10000}" ] && scaled="${MAX_STEPS_CAP:-10000}"
+      echo "[${speaker}] steps=${scaled} (${manifest_size} clips, ~${epochs} epochs at batch ${eff_batch})"
+      extra+=(--max-steps "${scaled}")
+    fi
+
     CUDA_VISIBLE_DEVICES="${gpu}" \
     uv run --no-sync python train.py \
       --config "${CONFIG}" \
       --manifest "${manifest}" \
       --output-dir "${outdir}" \
-      --wandb-run-name "${speaker}_lora_v3" \
+      --wandb-run-name "${speaker}_lora_v4" \
       "${init_args[@]}" \
       "${extra[@]}" \
       >> "${log}" 2>&1
