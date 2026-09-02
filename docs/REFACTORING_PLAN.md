@@ -1,6 +1,6 @@
 # Refactoring Plan
 
-Status: Steps 0 to 3 done (2026-09-02). Step 4 is still open and optional. Behavior-preserving refactoring of the largest modules. Each step is one PR and must leave CI green.
+Status: complete (2026-09-02). Steps 0 to 3 are done; Step 4 was considered and declined. Behavior-preserving refactoring of the largest modules. Each step is one PR and must leave CI green.
 
 Result so far: `server.py` 1226 to 110 lines, `train.py` 4818 to 2543 lines with `main()` down from 2120 to 200, and the test suite from 76 to 395. Both `--help` outputs are byte-identical to the pre-refactor baseline.
 
@@ -118,7 +118,9 @@ Done. `train.py` landed at 2543 rather than 1500, because `_run_training_loop` i
 
 One closure stayed behind deliberately. The sample emission closure captures `progress`, which is assigned after the closure is defined, so hoisting it into a function would capture `None` instead, and the `progress is not None` guard would swallow the difference silently.
 
-### Step 4 (optional, decide later): inference_runtime.py
+### Step 4 (optional): inference_runtime.py
+
+Declined on 2026-09-02. The plus 184 lines of divergence is barely over the bar the fork policy sets, and the tidying gained does not pay for making every future upstream merge of this file manual. The re-export guard test from Step 0 is already in place, so this can be picked up safely later if the file diverges further.
 
 The file has diverged enough to qualify, but shares a lot with upstream, so splitting it raises merge cost. If done: stage the `synthesize()` function (roughly lines 1214 to 1642, about 430 lines) into phases, and move the checkpoint loading group (`_load_checkpoint_from_pt`, `_load_checkpoint_from_safetensors`, `download_hf_checkpoint`) into an `inference_io.py`. Public names used by the gradio apps, `infer.py`, and `server.py` (`RuntimeKey`, `SamplingRequest`, `get_cached_runtime`, `save_wav`, `resolve_cfg_scales`, and the rest) must be re-exported from `inference_runtime` unchanged.
 
