@@ -229,6 +229,7 @@ class _PreparedItem:
     wav: torch.Tensor | None = None
     sample_rate: int | None = None
     speaker_id: str | None = None
+    source: str | None = None
     skip_reason: str | None = None
     error: str | None = None
 
@@ -250,6 +251,10 @@ def _prepare_example(
         if args.caption_column is not None:
             caption = _coerce_text(sample.get(args.caption_column, ""))
             caption = caption.strip() or None
+
+        source = None
+        if args.source_column is not None:
+            source = _coerce_text(sample.get(args.source_column, "")).strip() or None
 
         if not text:
             return _PreparedItem(idx=idx, status="skip", skip_reason="empty_text")
@@ -299,6 +304,7 @@ def _prepare_example(
             wav=wav,
             sample_rate=sr,
             speaker_id=speaker_id,
+            source=source,
         )
     except Exception as exc:
         return _PreparedItem(
@@ -586,6 +592,20 @@ def _run_worker(
                 f"speaker column(s) not found: {missing_speaker_columns}; available={ds.column_names}"
             )
 
+    if args.source_column is None:
+        args.source_column = next(
+            (c for c in ("source_path", "file_name") if c in ds.column_names), None
+        )
+    if args.source_column is None:
+        print(
+            "warning: no source column found; the manifest will not record which audio "
+            "each record came from. Pass --source-column to set one."
+        )
+    elif args.source_column not in ds.column_names:
+        raise ValueError(f"source column '{args.source_column}' not found: {ds.column_names}")
+    else:
+        print(f"Recording source provenance from column '{args.source_column}'.")
+
     if args.target_sample_rate is not None:
         ds = ds.cast_column(args.audio_column, Audio(sampling_rate=args.target_sample_rate))
     else:
@@ -711,6 +731,7 @@ def _run_worker(
         text = item.text
         caption = item.caption
         speaker_id = item.speaker_id
+        source = item.source
         if wav is None or sr is None or text is None:
             _inc_skip("prepare_error")
             _log_progress()
@@ -740,6 +761,8 @@ def _run_worker(
             payload["caption"] = caption
         if speaker_id is not None:
             payload["speaker_id"] = speaker_id
+        if source is not None:
+            payload["source_path"] = source
         out_f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         written += 1
         if args.flush_every > 0 and written % args.flush_every == 0:
@@ -846,6 +869,15 @@ def main() -> None:
         "--caption-column",
         default=None,
         help="Optional caption/style-control text column name. Output manifest key is always 'caption'.",
+    )
+    parser.add_argument(
+        "--source-column",
+        default=None,
+        help=(
+            "Column naming each row's origin, written to the manifest as 'source_path'. "
+            "Defaults to 'source_path' or 'file_name' when either exists. Without it the "
+            "manifest cannot be traced back to the audio it came from."
+        ),
     )
     parser.add_argument(
         "--speaker-column",
