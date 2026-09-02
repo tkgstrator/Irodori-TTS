@@ -17,7 +17,7 @@ logger = logging.getLogger("irodori_tts.server")
 
 
 class RuntimeRegistry:
-    """LoRA runtime + optional caption (VoiceDesign) runtime."""
+    """LoRA runtime + caption support, from the base checkpoint or a separate VoiceDesign one."""
 
     def __init__(self, cfg: ServerConfig) -> None:
         self.cfg = cfg
@@ -35,9 +35,16 @@ class RuntimeRegistry:
             raise KeyError(uuid)
         return spec
 
+    def _base_caption_runtime(self) -> InferenceRuntime | None:
+        """Base runtime, when its checkpoint carries caption conditioning (v4 and later)."""
+        base = self._runtime
+        if base is not None and base.model_cfg.use_caption_condition:
+            return base
+        return None
+
     @property
     def caption_available(self) -> bool:
-        return self._caption_runtime is not None
+        return self._caption_runtime is not None or self._base_caption_runtime() is not None
 
     @property
     def sample_rate(self) -> int | None:
@@ -83,6 +90,8 @@ class RuntimeRegistry:
             )
             logger.info("Loading caption (VoiceDesign) runtime")
             self._caption_runtime = InferenceRuntime.from_key(self._make_key(str(caption_path)))
+        elif self._base_caption_runtime() is not None:
+            logger.info("Caption conditioning served by the base checkpoint")
 
     def acquire(self, uuid: str) -> tuple[InferenceRuntime, SpeakerSpec]:
         spec = self.get_spec(uuid)
@@ -93,6 +102,9 @@ class RuntimeRegistry:
             return self._runtime, spec
 
     def acquire_caption(self) -> InferenceRuntime:
-        if self._caption_runtime is None:
+        if self._caption_runtime is not None:
+            return self._caption_runtime
+        base = self._base_caption_runtime()
+        if base is None:
             raise RuntimeError("Caption runtime not configured.")
-        return self._caption_runtime
+        return base

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import uuid as uuid_lib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -23,6 +24,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from safetensors.torch import save_file
 
+from irodori_tts.server import registry as registry_module
 from irodori_tts.server.audio import _apply_fade
 from irodori_tts.server.config import (
     _LORA_UUID_NAMESPACE,
@@ -64,6 +66,55 @@ def speaker_entry(**overrides: Any) -> dict[str, Any]:
     entry = {"uuid": UUID_A, "name": "Alice", "adapter": "/models/alice.safetensors"}
     entry.update(overrides)
     return entry
+
+
+class FakeRuntime:
+    """Stand-in for ``InferenceRuntime``: only what the registry and caption path touch."""
+
+    def __init__(self, checkpoint: str, *, use_caption_condition: bool) -> None:
+        self.checkpoint = checkpoint
+        self.model_cfg = SimpleNamespace(use_caption_condition=use_caption_condition)
+        self.codec = SimpleNamespace(sample_rate=48000)
+
+    def set_active_adapter(self, name: str) -> None:
+        self.active_adapter = name
+
+    def synthesize(self, _req: Any, **_kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(audio=torch.zeros(1, 4800), sample_rate=48000, used_seed=7)
+
+
+def install_fake_runtimes(
+    monkeypatch: pytest.MonkeyPatch, *, base_caption: bool
+) -> dict[str, list[str]]:
+    """Replace both runtime loaders with fakes and record the checkpoints they were asked for."""
+    calls: dict[str, list[str]] = {"base": [], "caption": []}
+
+    def from_base_with_adapters(*, key: Any, adapters: Any, default_adapter: Any) -> FakeRuntime:
+        del adapters, default_adapter
+        calls["base"].append(key.checkpoint)
+        return FakeRuntime(key.checkpoint, use_caption_condition=base_caption)
+
+    def from_key(key: Any) -> FakeRuntime:
+        calls["caption"].append(key.checkpoint)
+        return FakeRuntime(key.checkpoint, use_caption_condition=True)
+
+    monkeypatch.setattr(
+        registry_module.InferenceRuntime, "from_base_with_adapters", from_base_with_adapters
+    )
+    monkeypatch.setattr(registry_module.InferenceRuntime, "from_key", from_key)
+    return calls
+
+
+def caption_test_config(tmp_path: Path, **extra: Any) -> Path:
+    """Config with one discoverable LoRA and an existing (dummy) base checkpoint file."""
+    ckpt = tmp_path / "base.safetensors"
+    ckpt.write_text("x", encoding="utf-8")
+    lora_dir = tmp_path / "loras"
+    lora_dir.mkdir()
+    write_lora(lora_dir / "alice.safetensors", {"name": "Alice", "uuid": UUID_A})
+    data: dict[str, Any] = {"base_checkpoint": str(ckpt), "lora_dir": str(lora_dir)}
+    data.update(extra)
+    return write_config(tmp_path / "c.yaml", data)
 
 
 # ===================================================================
@@ -413,6 +464,68 @@ class TestResolveCheckpoint:
         cfg = load_config(write_config(tmp_path / "c.yaml", {}))
         with pytest.raises(FileNotFoundError, match="base checkpoint not found"):
             resolve_base_checkpoint(cfg)
+
+
+# ===================================================================
+# Caption runtime selection
+# ===================================================================
+
+
+class TestCaptionRuntimeSelection:
+    def test_capable_base_serves_captions_without_a_second_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        calls = install_fake_runtimes(monkeypatch, base_caption=True)
+        registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))
+        registry.load()
+        base, _ = registry.acquire(UUID_A)
+        assert registry.caption_available is True
+        assert registry.acquire_caption() is base
+        assert len(calls["base"]) == 1
+        assert calls["caption"] == []
+
+    def test_explicit_caption_checkpoint_wins_over_a_capable_base(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        calls = install_fake_runtimes(monkeypatch, base_caption=True)
+        caption_ckpt = tmp_path / "voicedesign.safetensors"
+        caption_ckpt.write_text("x", encoding="utf-8")
+        path = caption_test_config(tmp_path, caption_checkpoint=str(caption_ckpt))
+        registry = RuntimeRegistry(load_config(path))
+        registry.load()
+        base, _ = registry.acquire(UUID_A)
+        assert registry.acquire_caption() is not base
+        assert calls["caption"] == [str(caption_ckpt)]
+
+    def test_legacy_sidecar_still_serves_captions_for_an_incapable_base(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        calls = install_fake_runtimes(monkeypatch, base_caption=False)
+        path = caption_test_config(
+            tmp_path, caption_hf_repo="Aratako/Irodori-TTS-500M-v2-VoiceDesign"
+        )
+        registry = RuntimeRegistry(load_config(path))
+        registry.load()
+        base, _ = registry.acquire(UUID_A)
+        assert registry.caption_available is True
+        assert registry.acquire_caption() is not base
+        assert len(calls["caption"]) == 1
+
+    def test_incapable_base_without_a_caption_checkpoint_has_no_caption(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        install_fake_runtimes(monkeypatch, base_caption=False)
+        registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))
+        registry.load()
+        assert registry.caption_available is False
+        with pytest.raises(RuntimeError, match="Caption runtime not configured"):
+            registry.acquire_caption()
+
+    def test_unloaded_registry_has_no_caption(self, tmp_path: Path):
+        registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))
+        assert registry.caption_available is False
+        with pytest.raises(RuntimeError, match="Caption runtime not configured"):
+            registry.acquire_caption()
 
 
 # ===================================================================
@@ -824,7 +937,8 @@ class TestSynthValidation:
         assert response.status_code == 404
         assert response.json()["detail"] == f"unknown speaker_id: {UUID_B}"
 
-    def test_caption_without_runtime_is_501(self, client: TestClient):
+    def test_caption_without_any_caption_capable_runtime_is_501(self, client: TestClient):
+        """No runtime is loaded here, so nothing can serve captions."""
         response = client.post("/synth", json={"text": "hi", "caption": "やわらかい声"})
         assert response.status_code == 501
         assert response.json()["detail"] == "caption runtime not configured"
@@ -908,7 +1022,7 @@ class TestSynthVdsValidation:
         assert response.status_code == 404
         assert UUID_B in response.json()["detail"]
 
-    def test_caption_speaker_without_runtime_is_501(self, client: TestClient):
+    def test_caption_speaker_without_any_caption_capable_runtime_is_501(self, client: TestClient):
         response = client.post(
             "/synth/vds",
             files=vds_upload('@version: 1\n@speaker a = caption "やわらかい声"\n\na: hi\n'),
@@ -922,6 +1036,36 @@ class TestSynthVdsValidation:
             "/synth/vds", files=vds_upload(b"\xef\xbb\xbf" + source.encode("utf-8"))
         )
         assert response.status_code == 404
+
+
+class TestCaptionCapableBaseRoutes:
+    """With a caption-capable base and no caption checkpoint, caption requests stop being 501."""
+
+    @pytest.fixture
+    def caption_client(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        install_fake_runtimes(monkeypatch, base_caption=True)
+        return TestClient(build_app(caption_test_config(tmp_path), eager_load=True))
+
+    def test_health_reports_caption(self, caption_client: TestClient):
+        assert caption_client.get("/health").json() == {
+            "status": "ok",
+            "speakers": 1,
+            "caption": True,
+        }
+
+    def test_single_cue_caption_synthesis(self, caption_client: TestClient):
+        response = caption_client.post("/synth", json={"text": "hi", "caption": "やわらかい声"})
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "audio/pcm"
+        assert response.headers["X-TTS-Sample-Rate"] == "48000"
+
+    def test_vds_caption_speaker(self, caption_client: TestClient):
+        response = caption_client.post(
+            "/synth/vds",
+            files=vds_upload('@version: 1\n@speaker a = caption "やわらかい声"\n\na: hi\n'),
+        )
+        assert response.status_code == 200
+        assert response.headers["X-TTS-Cue-Count"] == "1"
 
 
 class TestOpenApiContract:

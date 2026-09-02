@@ -1,6 +1,6 @@
 # Irodori-TTS 推論サーバガイド
 
-学習済みの LoRA 話者アダプタを FastAPI で配信する `server.py` の使い方です。1 つのベースモデル + 複数 LoRA を 1 プロセスに載せ、リクエストごとに active adapter を切り替えて合成します。オプションで VoiceDesign（caption）ランタイムを並載すると、自然文による話者記述での合成も可能です。
+学習済みの LoRA 話者アダプタを FastAPI で配信する `server.py` の使い方です。1 つのベースモデル + 複数 LoRA を 1 プロセスに載せ、リクエストごとに active adapter を切り替えて合成します。現行の統合チェックポイント `Aratako/Irodori-TTS-v4.1-Small` は caption 条件付けを内蔵しているため、自然文による話者記述（VoiceDesign）での合成も同じベースモデルだけで行えます。
 
 ---
 
@@ -8,7 +8,7 @@
 
 - **ベースモデル（LoRA）**: `configs/runtime.yaml` の `base_checkpoint`（ローカルに無ければ `base_hf_repo` から HF に取りに行きます）を 1 回だけ読み込み。
 - **話者アダプタ**: `lora_dir`（既定 `models/LoRA/`）配下の `.safetensors` を起動時にスキャンし、それぞれに埋め込まれた metadata (`name` / `uuid` / `defaults` / `adapter_config`) から話者を自動登録します。YAML 側に話者ブロックを書く必要はありません。
-- **VoiceDesign（caption）ランタイム**: `caption_hf_repo`（または `caption_checkpoint`）が設定されていれば、VoiceDesign チェックポイントを第 2 ランタイムとしてロードします。自然文による話者記述（caption）で合成が可能になります。
+- **VoiceDesign（caption）**: ベースモデルが caption 条件付けに対応していれば（v4 系）、そのまま caption 合成に使われます。第 2 ランタイムはロードされず、同じ重みを二重に載せることもありません。v2 / v3 系の caption 非対応ベースを使う場合のみ、`caption_checkpoint`（または `caption_hf_repo`）で別建ての VoiceDesign チェックポイントを並載します。どちらも無い場合、caption 指定は 501 を返します。
 - **推論**: `/synth` にテキストと `speaker_id` (= 話者 UUID) または `caption`（自然文記述）を POST すると、WAV が返ります。
 
 ---
@@ -16,8 +16,8 @@
 ## 2. `configs/runtime.yaml`
 
 ```yaml
-base_checkpoint: models/Irodori-TTS-500M-v2/model.safetensors
-base_hf_repo: Aratako/Irodori-TTS-500M-v2
+base_checkpoint: models/Irodori-TTS-v4.1-Small/model.safetensors
+base_hf_repo: Aratako/Irodori-TTS-v4.1-Small
 base_hf_filename: model.safetensors
 
 model_device: cuda
@@ -29,8 +29,11 @@ codec_deterministic_encode: true
 codec_deterministic_decode: true
 enable_watermark: false
 
-caption_hf_repo: Aratako/Irodori-TTS-500M-v2-VoiceDesign
-caption_hf_filename: model.safetensors
+# caption 条件付けは v4.1 ベースに内蔵されているため、caption_* は不要。
+# v2 / v3 ベースで caption を使う場合のみ以下を指定する:
+#   caption_checkpoint: models/Irodori-TTS-500M-v2-VoiceDesign/model.safetensors
+#   caption_hf_repo: Aratako/Irodori-TTS-500M-v2-VoiceDesign
+#   caption_hf_filename: model.safetensors
 
 tail_window_size: 20
 tail_std_threshold: 0.05
@@ -52,8 +55,8 @@ lora_dir: models/LoRA
 | `codec_repo`                 | DACVAE codec の HF repo |
 | `codec_deterministic_encode/decode` | 決定論モード（同じ入力 → 同じ出力） |
 | `enable_watermark`           | watermark 付与を有効にするか（通常 `false`） |
-| `caption_checkpoint`         | VoiceDesign チェックポイントのローカルパス。省略時は `caption_hf_repo` から pull |
-| `caption_hf_repo` / `caption_hf_filename` | VoiceDesign の HF fallback。両方省略で caption 無効 |
+| `caption_checkpoint`         | 別建て VoiceDesign チェックポイントのローカルパス（任意）。指定するとベースが caption 対応でもこちらが優先される |
+| `caption_hf_repo` / `caption_hf_filename` | 上記の HF fallback。両方省略時は caption 対応ベース（v4 系）がそのまま使われ、非対応ベースなら caption は無効 |
 | `tail_window_size`           | 末尾トリミングのウィンドウサイズ（デフォルト `20`） |
 | `tail_std_threshold`         | 末尾トリミングの標準偏差閾値（デフォルト `0.05`） |
 | `tail_mean_threshold`        | 末尾トリミングの平均値閾値（デフォルト `0.1`） |
@@ -205,7 +208,7 @@ docker compose -f docker/runtime/compose.yaml logs -f    # ログ追跡
 
 省略した項目は LoRA metadata の `defaults` → サーバ内部の既定値 (`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`, `min_seconds=0.5`, `max_seconds=30.0`, `duration_scale=1.0`) の順にフォールバックします。`seed` も同様にフォールバックし、負値は「ランダム」を意味します。`min_seconds > max_seconds` になる組み合わせ、および `defaults` 由来の `duration_scale` が `0` 以下になる場合は 422 で拒否されます。
 
-レスポンス: `audio/wav` バイナリ。ヘッダに `X-TTS-Speaker-Id` / `X-TTS-Speaker-Name` / `X-TTS-Used-Seed` / `X-TTS-Sample-Rate` が付きます。v3 系チェックポイントでは duration predictor が長さを決めるため、不要な末尾無音は最小限です（v2 系は 30 秒固定のフォールバック）。
+レスポンス: `audio/wav` バイナリ。ヘッダに `X-TTS-Speaker-Id` / `X-TTS-Speaker-Name` / `X-TTS-Used-Seed` / `X-TTS-Sample-Rate` が付きます。v3 / v4 系チェックポイントでは duration predictor が長さを決めるため、不要な末尾無音は最小限です（v2 系は 30 秒固定のフォールバック）。
 
 ```bash
 # LoRA 単発合成
@@ -217,7 +220,7 @@ curl -s http://localhost:8765/synth \
 
 #### VoiceDesign 単発モード（caption + text → WAV）
 
-`speaker_id` の代わりに `caption`（自然文による話者記述）を指定します。`speaker_id` と `caption` は**排他**です。`caption_hf_repo` が設定されていないサーバでは 501 を返します。
+`speaker_id` の代わりに `caption`（自然文による話者記述）を指定します。`speaker_id` と `caption` は**排他**です。caption 対応ベース（v4 系）または別建ての VoiceDesign チェックポイントのどちらも無いサーバでは 501 を返します。
 
 ```json
 {
