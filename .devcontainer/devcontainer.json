@@ -11,19 +11,20 @@
         "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
     },
     "mounts": [
-        "source=${env:HOME}/.aws,target=/home/vscode/.aws,type=bind,consistency=cached,readonly",
-        "source=${env:HOME}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached",
-        "source=${env:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached,readonly"
+        "source=${localEnv:HOME}/.aws,target=/home/vscode/.aws,type=bind,consistency=cached,readonly",
+        "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached",
+        "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached,readonly",
+        "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,consistency=cached"
     ],
     "remoteEnv": {
+		"ANTHROPIC_BASE_URL": "${localEnv:ANTHROPIC_BASE_URL}",
+        "ANTHROPIC_AUTH_TOKEN": "${localEnv:ANTHROPIC_AUTH_TOKEN}",
+        "HF_TOKEN": "${localEnv:HF_TOKEN}",
         "UV_LINK_MODE": "copy",
-        "WANDB_API_KEY": "${localEnv:WANDB_API_KEY}",
-        "WAKATIME_API_KEY": "${localEnv:WAKATIME_API_KEY}"
+        "WAKATIME_API_KEY": "${localEnv:WAKATIME_API_KEY}",
+        "WANDB_API_KEY": "${localEnv:WANDB_API_KEY}"
     },
     "features": {
-        "ghcr.io/devcontainers/features/git:1": {
-            "version": "2.52.0"
-        },
         "ghcr.io/devcontainers/features/common-utils:2": {
             "username": "vscode",
             "userUid": "1000",
@@ -33,15 +34,20 @@
         "ghcr.io/devcontainers/features/python:1": {
             "version": "3.12"
         },
+        "ghcr.io/devcontainers/features/github-cli:1": {},
         "ghcr.io/devcontainers-extra/features/ffmpeg-apt-get:1": {},
         "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
             "moby": false
         },
         "ghcr.io/devcontainers/features/git-lfs:1": {},
-        "ghcr.io/duduribeiro/devcontainer-features/tmux:1": {},
         "ghcr.io/jsburckhardt/devcontainer-features/ruff:1": {},
         "ghcr.io/jsburckhardt/devcontainer-features/uv:1": {},
-        "ghcr.io/stu-bell/devcontainer-features/claude-code:0": {}
+        "ghcr.io/stu-bell/devcontainer-features/claude-code:0": {},
+        "ghcr.io/devcontainers-community/features/direnv:1": {},
+        "ghcr.io/shyim/devcontainers-features/bun:0": {},
+        "ghcr.io/devcontainers/features/node:1.5.0": {
+          "version": "25.4.0"
+        }
     },
     "forwardPorts": [
         8501
@@ -51,23 +57,18 @@
     "customizations": {
         "vscode": {
             "extensions": [
-                "Anthropic.claude-code",
                 "EditorConfig.EditorConfig",
-                "GitHub.copilot",
-                "GitHub.copilot-chat",
                 "HarshAgarwal1012.claude-usage-bar",
                 "PKief.material-icon-theme",
+                "WakaTime.vscode-wakatime",
                 "antfu.file-nesting",
-                "bierner.markdown-mermaid",
                 "bierner.markdown-preview-github-styles",
                 "charliermarsh.ruff",
-                "eamodio.gitlens",
                 "jebbs.markdown-extended",
                 "ms-python.python",
                 "pHofer94.vscode-taskviewexplorer",
                 "redhat.vscode-yaml",
-                "tamasfe.even-better-toml",
-                "vsls-contrib.gitdoc"
+                "tamasfe.even-better-toml"
             ],
             "settings": {}
         }

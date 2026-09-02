@@ -10,4 +10,4 @@ RUN sed -i 's|http://archive.ubuntu.com|http://ftp.riken.jp/Linux|g; s|http://se
 RUN \
   --mount=type=cache,target=/var/lib/apt,sharing=locked \
   --mount=type=cache,target=/var/cache/apt,sharing=locked \
-  apt-get update && apt-get install -y git-filter-repo
+  apt-get update && apt-get install -y git-filter-repo libatomic1
