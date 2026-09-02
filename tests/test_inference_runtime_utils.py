@@ -459,8 +459,14 @@ class TestDeviceAndPrecision:
         assert resolve_runtime_device("cpu") == torch.device("cpu")
         assert resolve_runtime_device(torch.device("cpu")).type == "cpu"
 
-    def test_unknown_device_raises(self):
+    def test_known_but_unsupported_device_raises_value_error(self):
         with pytest.raises(ValueError, match="Unsupported inference device"):
+            resolve_runtime_device("meta")
+
+    def test_unparseable_device_raises_runtime_error_from_torch(self):
+        # torch.device() rejects the string before the helper's own check runs,
+        # so callers see a RuntimeError rather than the friendlier ValueError.
+        with pytest.raises(RuntimeError, match="device type at start of device string"):
             resolve_runtime_device("tpu")
 
     def test_cpu_only_supports_fp32(self):
