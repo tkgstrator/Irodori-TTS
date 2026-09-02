@@ -1,5 +1,5 @@
-base_checkpoint: models/Irodori-TTS-500M-v3/model.safetensors
-base_hf_repo: Aratako/Irodori-TTS-500M-v3
+base_checkpoint: models/Irodori-TTS-v4.1-Small/model.safetensors
+base_hf_repo: Aratako/Irodori-TTS-v4.1-Small
 base_hf_filename: model.safetensors
 
 model_device: cuda
@@ -10,12 +10,14 @@ codec_repo: Aratako/Semantic-DACVAE-Japanese-32dim
 codec_deterministic_encode: true
 codec_deterministic_decode: true
 
-# VoiceDesign (caption) runtime — loaded alongside the LoRA base model.
-# If both caption_checkpoint and caption_hf_repo are omitted, caption
-# speakers in VDS scripts will return 501.
-caption_checkpoint: models/Irodori-TTS-500M-v2-VoiceDesign/model.safetensors
-caption_hf_repo: Aratako/Irodori-TTS-500M-v2-VoiceDesign
-caption_hf_filename: model.safetensors
+# VoiceDesign (caption) conditioning is part of the unified v4.1 base above, so
+# no second runtime is loaded and caption speakers work out of the box.
+# caption_checkpoint / caption_hf_repo remain as an override: set them to load a
+# separate VoiceDesign checkpoint alongside a legacy v2/v3 base, e.g.
+#   caption_checkpoint: models/Irodori-TTS-500M-v2-VoiceDesign/model.safetensors
+#   caption_hf_repo: Aratako/Irodori-TTS-500M-v2-VoiceDesign
+#   caption_hf_filename: model.safetensors
+# With a caption-incapable base and no override, caption speakers return 501.
 
 # LoRA adapters are auto-discovered as single-file .safetensors exports under
 # this directory. Each file carries its own metadata (name, uuid, defaults,

@@ -37,6 +37,12 @@ jobs:
           enable-cache: true
           python-version: "3.12"
 
+      # torchcodec dlopens the FFmpeg shared libraries at import time, so
+      # save_wav cannot run without them. Both docker/runtime and docker/train
+      # install ffmpeg for the same reason.
+      - name: install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: install
         run: uv sync --extra cpu
 

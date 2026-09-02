@@ -34,7 +34,7 @@
 {"status": "ok", "speakers": 3, "caption": true}
 ```
 
-`caption` は VoiceDesign（caption）ランタイムが有効かどうかを示す。
+`caption` は VoiceDesign（caption）合成が可能かどうかを示す。caption 条件付けに対応したベースモデル（v4 系）、または別建ての VoiceDesign チェックポイントのどちらかがあれば `true` になる。
 
 ---
 
@@ -123,13 +123,13 @@
 | `max_seconds` | `float` | 任意 | duration predictor 出力の上限秒（`>0`、デフォルト `30.0`） |
 | `duration_scale` | `float` | 任意 | predictor 予測値の倍率（`>0`、デフォルト `1.0`） |
 
-**パラメータ解決順序**: リクエスト値 → 話者 `defaults` → サーバ内部デフォルト（`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`, `min_seconds=0.5`, `max_seconds=30.0`, `duration_scale=1.0`）。`min_seconds > max_seconds` の組み合わせは 422 で拒否される。
+**パラメータ解決順序**: リクエスト値 → 話者 `defaults` → サーバ内部デフォルト（`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`, `min_seconds=0.5`, `max_seconds=30.0`, `duration_scale=1.0`）。`seed` も同じ順序で解決され、負値は「ランダム」を意味する。`min_seconds > max_seconds` の組み合わせ、および `defaults` 由来の `duration_scale` が `0` 以下になる場合は 422 で拒否される。
 
 ---
 
 ### VoiceDesign 単発モード
 
-`caption`（自然文による話者記述）でモデルに話者特性を指示し合成する。LoRA 話者登録が不要なため、任意のキャラクターを即座に生成できる。`GET /health` の `caption: true` で VoiceDesign ランタイムの有無を確認できる（`false` の場合は 501 エラー）。
+`caption`（自然文による話者記述）でモデルに話者特性を指示し合成する。LoRA 話者登録が不要なため、任意のキャラクターを即座に生成できる。`GET /health` の `caption: true` で利用可否を確認できる（`false` の場合は 501 エラー）。
 
 #### リクエスト
 
@@ -157,7 +157,7 @@
 
 - **Content-Type**: `audio/wav`
 - **Body**: PCM16 mono WAV バイナリ
-- **固定長**: 常に 30 秒分の波形が返る。末尾に無音が含まれるため、クライアント側でトリムすること。
+- **長さ**: duration predictor を持つチェックポイント（v3 / v4 系）では発話長に応じた波形が返る。持たない v2 系 VoiceDesign では常に 30 秒分が返り、末尾に無音が含まれるためクライアント側でトリムすること。
 
 **レスポンスヘッダー**:
 
@@ -298,11 +298,11 @@ Content-Type: application/octet-stream
 // LoRA 話者（現行 API で使用可能）
 { "type": "lora", "uuid": "<UUID>" }
 
-// Caption 話者（VoiceDesign ランタイムが必要）
+// Caption 話者（caption 合成に対応したサーバが必要）
 { "type": "caption", "caption": "<自然文による話者記述>" }
 ```
 
-`type: "lora"` は常に使用可能。`type: "caption"` は VoiceDesign ランタイムが有効な場合のみ使用可能（`GET /health` の `caption: true` で確認）。
+`type: "lora"` は常に使用可能。`type: "caption"` は caption 合成が有効な場合のみ使用可能（`GET /health` の `caption: true` で確認）。
 
 ### Cue
 
@@ -376,7 +376,7 @@ cue ごとに以下の順でマージされる（後が優先）:
 | `404` | `speaker_id` が未登録 / VDS 内の UUID が不明 |
 | `422` | バリデーションエラー（必須フィールド欠落、VDS パースエラー等） |
 | `500` | 合成処理の内部エラー |
-| `501` | caption 話者を指定したが API 未対応 |
+| `501` | caption 話者を指定したが、サーバが caption 合成に対応していない |
 
 VDS パースエラーの `detail` には行番号が含まれる（例: `"line 5: undefined speaker alias: 'unknown'"`）。
 
