@@ -100,3 +100,20 @@ train:
   lora_target_modules: diffusion_attn
   lora_modules_to_save: auto
   seed: 0
+
+# Absent from the upstream v4 config, so runs produced no audio at all and no
+# CLI flag can turn it on. Checkpoints have to be compared by ear, and the
+# stopping policy is "keep the best-sounding val checkpoint", so samples are
+# what makes that judgement possible while a run is still going.
+# Prompts are left unset: train.py fills them from <dataset_dir>/config.yaml's
+# sample_texts, or picks length-balanced ones from the manifest.
+sample_generation:
+  enabled: true
+  every: 500
+  on_best_val: true
+  num_steps: 32
+  cfg_scale_text: 3.0
+  cfg_scale_caption: 3.0
+  cfg_scale_speaker: 5.0
+  cfg_guidance_mode: independent
+  codec_device: cpu
