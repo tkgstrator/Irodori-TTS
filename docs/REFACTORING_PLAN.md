@@ -159,18 +159,18 @@ uv run pytest -q
 
 Additionally: after Steps 1 and 4, `python server.py --help` and a `TestClient` smoke of `/health` and `/speakers`; after Steps 2 and 3, diff `python train.py --help` against the pre-change output; import smoke via `uv run python -c "import server, train"`.
 
-## Bugs found, not fixed
+## Bugs found
 
-Surfaced while writing the characterization tests and moving code. None were fixed, because every step was behavior-preserving by contract, and the tests pin the current behavior rather than the intended one. Ordered by how much damage they can do while staying invisible.
+Surfaced while writing the characterization tests and moving code. None were fixed during Steps 0 to 3, because every step was behavior-preserving by contract. They were fixed afterwards in a separate pass, with the characterization assertions flipped to the intended behavior; items 6 and 8 were deliberately left alone for the reasons given. Ordered by how much damage they can do while staying invisible.
 
 1. `run_validation` restores training mode outside a `try`/`finally`. It records `was_training`, drops the model to `eval()`, and calls `train()` at the end, so an exception anywhere in the validation loop skips the restore. One failed validation leaves the rest of the run training in eval mode, with dropout and batch norm inert and no error raised.
 2. Masked MSE lets NaN through the mask. The reduction multiplies by the mask, and `NaN * 0.0` is `NaN`, so a NaN behind the mask poisons the loss. Finite garbage behind the mask is correctly ignored, which is what makes this easy to miss.
 3. The safetensors branch of `_load_model_state_from_checkpoint` always returns `train_config` as `None` while the `.pt` branch returns it. Harmless today because the only caller discards it, and silently wrong the moment someone initializes from safetensors and reads that value.
 4. `_autopick_prompts_from_manifest` documents itself as deterministic but sorts through a `set`, so texts of equal length order by `PYTHONHASHSEED`. Sample prompts can differ between processes.
 5. Speaker defaults `seed` is dropped by `_merge_defaults`, which has no `seed` key in its skeleton. A per-speaker seed in the config never reaches synthesis.
-6. A relative `lora_dir` resolves against the current working directory rather than the config file's directory, so the same config behaves differently depending on where the server was started.
+6. A relative `lora_dir` resolves against the current working directory rather than the config file's directory, so the same config behaves differently depending on where the server was started. Kept on purpose: `configs/runtime.yaml` sets `lora_dir: models/LoRA` and lives in `configs/`, so config-relative resolution would look in `configs/models/LoRA` and break, while the docker deployment mounts the config at `/app/config.yaml` with the working directory at `/app`, where the two readings coincide.
 7. `duration_scale` bypasses the positive-value filter, so a negative value passes through when supplied via defaults.
-8. `_apply_fade` assumes numpy and raises `AttributeError` on a torch tensor, except for short inputs that hit the early return.
+8. `_apply_fade` assumes numpy and raises `AttributeError` on a torch tensor, except for short inputs that hit the early return. Left as is: every call site converts with `.cpu().float().numpy()` first, so no live path can pass a tensor and handling one would be speculative.
 9. `load_config` raises `AttributeError` on an empty YAML file instead of reporting a bad config.
 10. `_synth_single` mutates `req.text` on the request object it was handed.
 11. `_resolve_speaker_name` is dead code; nothing in the repository calls it.
