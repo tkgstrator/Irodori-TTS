@@ -84,7 +84,7 @@ uv run python scripts/lora/export_lora_to_safetensors.py \
 | `format`          | `irodori-tts-lora/v1` 固定。LoRA 単一ファイル export の schema version で、ベースモデル世代（v2 / v3）とは別物 |
 | `name`            | サーバ / デモ UI に表示される名前。通常は `speaker.label` と同じ |
 | `uuid`            | `speaker_id`。`--uuid` 未指定時は出力ファイル名から UUIDv5 で決定論的に生成 |
-| `defaults`        | JSON。`num_steps` / `cfg_scale_text` / `cfg_scale_speaker` / `speaker_kv_scale` / `truncation_factor` / `seconds` / `min_seconds` / `max_seconds` / `duration_scale` の既定値 |
+| `defaults`        | JSON。`num_steps` / `cfg_scale_text` / `cfg_scale_speaker` / `speaker_kv_scale` / `truncation_factor` / `seed` / `seconds` / `min_seconds` / `max_seconds` / `duration_scale` の既定値 |
 | `adapter_config`  | JSON。PEFT の `adapter_config.json`（rank / target modules 等） |
 | `base_init`       | JSON。学習時の `base_init.json` |
 | `model_config`    | JSON。学習時の `config.json`（モデル / train config dump） |
@@ -203,7 +203,7 @@ docker compose -f docker/runtime/compose.yaml logs -f    # ログ追跡
 | `max_seconds`       | 任意 | duration predictor 出力の上限秒。`>0`。デフォルト `30.0` |
 | `duration_scale`    | 任意 | predictor 予測値の倍率。`>0`。デフォルト `1.0` |
 
-省略した項目は LoRA metadata の `defaults` → サーバ内部の既定値 (`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`, `min_seconds=0.5`, `max_seconds=30.0`, `duration_scale=1.0`) の順にフォールバックします。`min_seconds > max_seconds` になる組み合わせは 422 で拒否されます。
+省略した項目は LoRA metadata の `defaults` → サーバ内部の既定値 (`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`, `min_seconds=0.5`, `max_seconds=30.0`, `duration_scale=1.0`) の順にフォールバックします。`seed` も同様にフォールバックし、負値は「ランダム」を意味します。`min_seconds > max_seconds` になる組み合わせ、および `defaults` 由来の `duration_scale` が `0` 以下になる場合は 422 で拒否されます。
 
 レスポンス: `audio/wav` バイナリ。ヘッダに `X-TTS-Speaker-Id` / `X-TTS-Speaker-Name` / `X-TTS-Used-Seed` / `X-TTS-Sample-Rate` が付きます。v3 系チェックポイントでは duration predictor が長さを決めるため、不要な末尾無音は最小限です（v2 系は 30 秒固定のフォールバック）。
 

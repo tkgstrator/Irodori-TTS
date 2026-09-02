@@ -120,7 +120,7 @@ def _synth_single(  # noqa: C901, PLR0915
     """Single-cue synthesis. Returns WAV by default, raw PCM16 mono when Accept: audio/pcm."""
     if not req.text:
         raise HTTPException(status_code=422, detail="'text' is required")
-    req.text = expand_shortcodes(req.text)
+    text = expand_shortcodes(req.text)
     if req.speaker_id and req.caption:
         raise HTTPException(
             status_code=422,
@@ -154,7 +154,7 @@ def _synth_single(  # noqa: C901, PLR0915
 
         sampling_req = _caption_sampling_req(
             cfg,
-            req.text,
+            text,
             req.caption,
             num_steps=num_steps,
             cfg_scale_text=cfg_text,
@@ -214,7 +214,7 @@ def _synth_single(  # noqa: C901, PLR0915
     )
 
     sampling_req = SamplingRequest(
-        text=req.text,
+        text=text,
         caption=None,
         ref_wav=None,
         ref_latent=None,

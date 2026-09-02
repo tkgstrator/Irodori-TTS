@@ -115,6 +115,9 @@ def _discover_lora_dir(lora_dir: Path) -> list[SpeakerSpec]:
 def load_config(path: Path) -> ServerConfig:
     with path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
+    # ValueError, not TypeError: matches how irodori_tts/config.py reports a bad config root.
+    if not isinstance(raw, dict):
+        raise ValueError(f"Config root must be a mapping: {path}")  # noqa: TRY004
 
     speakers: list[SpeakerSpec] = []
     lora_dir_raw = raw.get("lora_dir")

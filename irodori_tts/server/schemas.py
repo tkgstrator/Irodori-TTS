@@ -249,6 +249,7 @@ def _merge_defaults(req: SynthRequest, defaults: dict[str, Any]) -> dict[str, An
         "min_seconds": 0.5,
         "max_seconds": 30.0,
         "duration_scale": 1.0,
+        "seed": None,
     }
     for k, v in defaults.items():
         if k in resolved:
@@ -260,7 +261,17 @@ def _merge_defaults(req: SynthRequest, defaults: dict[str, Any]) -> dict[str, An
         if k in _POSITIVE_ONLY and float(override) <= 0:
             continue
         resolved[k] = override
-    resolved["seed"] = req.seed if (req.seed is not None and req.seed >= 0) else None
+    # A negative seed means "random" both in the request and in speaker defaults.
+    seed = resolved["seed"]
+    resolved["seed"] = int(seed) if seed is not None and int(seed) >= 0 else None
+    if resolved["duration_scale"] is not None and float(resolved["duration_scale"]) <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"resolved duration_scale ({resolved['duration_scale']}) must be > 0 "
+                "after merging speaker defaults"
+            ),
+        )
     if (
         resolved["min_seconds"] is not None
         and resolved["max_seconds"] is not None

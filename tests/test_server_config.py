@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 import torch
 import yaml
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from safetensors.torch import save_file
@@ -32,12 +33,14 @@ from irodori_tts.server.config import (
     load_config,
     resolve_base_checkpoint,
 )
+from irodori_tts.server.registry import RuntimeRegistry
 from irodori_tts.server.schemas import (
     SynthRequest,
     VdsDefaults,
     VdsScriptBody,
     _merge_defaults,
 )
+from irodori_tts.server.synthesis import _synth_single
 from server import build_app
 
 UUID_A = "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb"
@@ -190,11 +193,17 @@ class TestLoadConfigErrors:
         with pytest.raises(FileNotFoundError):
             load_config(tmp_path / "nope.yaml")
 
-    def test_empty_file_raises_attribute_error(self, tmp_path: Path):
-        """An empty YAML parses to None, which load_config does not guard against."""
+    def test_empty_file_is_reported_as_a_bad_config(self, tmp_path: Path):
+        """An empty YAML parses to None, which is not a usable config root."""
         path = tmp_path / "c.yaml"
         path.write_text("", encoding="utf-8")
-        with pytest.raises(AttributeError):
+        with pytest.raises(ValueError, match="Config root must be a mapping"):
+            load_config(path)
+
+    def test_non_mapping_root_is_reported_as_a_bad_config(self, tmp_path: Path):
+        path = tmp_path / "c.yaml"
+        path.write_text("- a\n- b\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="Config root must be a mapping"):
             load_config(path)
 
     def test_malformed_yaml(self, tmp_path: Path):
@@ -332,7 +341,14 @@ class TestLoadConfigLoraDir:
     def test_relative_lora_dir_prefers_cwd_when_it_exists(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        """A relative lora_dir that resolves from the CWD wins over the config dir."""
+        """CWD-relative resolution wins over the config dir, and that is intentional.
+
+        ``configs/runtime.yaml`` ships ``lora_dir: models/LoRA`` while living in
+        ``configs/``: resolving against the config file would look in
+        ``configs/models/LoRA`` and find nothing. In the runtime container the
+        config is mounted at ``/app/config.yaml`` with CWD ``/app``, so both
+        readings coincide there. Do not "fix" this into config-relative.
+        """
         conf_dir = tmp_path / "conf"
         (conf_dir / "loras").mkdir(parents=True)
         write_lora(conf_dir / "loras" / "from_config.safetensors")
@@ -551,9 +567,20 @@ class TestMergeDefaults:
         params = _merge_defaults(SynthRequest(text="hi"), {"bogus": 1})
         assert "bogus" not in params
 
-    def test_speaker_default_seed_is_ignored(self):
-        """``seed`` is not in the resolved skeleton, so a speaker default never lands."""
+    def test_speaker_default_seed_is_used(self):
         params = _merge_defaults(SynthRequest(text="hi"), {"seed": 99})
+        assert params["seed"] == 99
+
+    def test_request_seed_overrides_speaker_default_seed(self):
+        params = _merge_defaults(SynthRequest(text="hi", seed=7), {"seed": 99})
+        assert params["seed"] == 7
+
+    def test_negative_request_seed_means_random_despite_speaker_default(self):
+        params = _merge_defaults(SynthRequest(text="hi", seed=-1), {"seed": 99})
+        assert params["seed"] is None
+
+    def test_negative_speaker_default_seed_means_random(self):
+        params = _merge_defaults(SynthRequest(text="hi"), {"seed": -1})
         assert params["seed"] is None
 
     @pytest.mark.parametrize(
@@ -575,18 +602,22 @@ class TestMergeDefaults:
         params = _merge_defaults(SynthRequest(text="hi", cfg_scale_text=0.0), {})
         assert params["cfg_scale_text"] == 3.0
 
-    def test_duration_scale_is_not_positive_only(self):
-        """duration_scale bypasses the positive-only filter when it comes from defaults."""
-        params = _merge_defaults(SynthRequest(text="hi"), {"duration_scale": -2})
-        assert params["duration_scale"] == -2
+    @pytest.mark.parametrize("bad", [-2, 0])
+    def test_non_positive_duration_scale_from_defaults_raises_http_422(self, bad: float):
+        with pytest.raises(HTTPException) as excinfo:
+            _merge_defaults(SynthRequest(text="hi"), {"duration_scale": bad})
+        assert excinfo.value.status_code == 422
+        assert "duration_scale" in excinfo.value.detail
+
+    def test_positive_duration_scale_from_defaults_is_kept(self):
+        params = _merge_defaults(SynthRequest(text="hi"), {"duration_scale": 1.5})
+        assert params["duration_scale"] == 1.5
 
     @pytest.mark.parametrize(("seed", "expected"), [(None, None), (-1, None), (0, 0), (42, 42)])
     def test_seed_normalization(self, seed: int | None, expected: int | None):
         assert _merge_defaults(SynthRequest(text="hi", seed=seed), {})["seed"] == expected
 
     def test_merged_bounds_inversion_raises_http_422(self):
-        from fastapi import HTTPException
-
         with pytest.raises(HTTPException) as excinfo:
             _merge_defaults(SynthRequest(text="hi"), {"min_seconds": 10.0, "max_seconds": 2.0})
         assert excinfo.value.status_code == 422
@@ -660,9 +691,34 @@ class TestApplyFade:
         assert _apply_fade(audio, 1000) is audio
 
     def test_torch_tensor_is_unsupported(self):
-        """The helper calls ndarray.copy(), which torch.Tensor does not provide."""
+        """Numpy only, by design: every call site converts with ``.numpy()`` first.
+
+        The helper calls ``ndarray.copy()``, which ``torch.Tensor`` does not
+        provide. No reachable path hands it a tensor, so this is documented
+        rather than supported.
+        """
         with pytest.raises(AttributeError):
             _apply_fade(torch.ones(1000), 1000)
+
+
+# ===================================================================
+# _synth_single
+# ===================================================================
+
+
+class TestSynthSingle:
+    def test_shortcode_expansion_does_not_mutate_the_request(self, tmp_path: Path):
+        cfg = load_config(write_config(tmp_path / "c.yaml", {}))
+        req = SynthRequest(text="ねえ{cheerful}", speaker_id=UUID_A)
+        with pytest.raises(HTTPException) as excinfo:
+            _synth_single(
+                RuntimeRegistry(cfg),
+                cfg,
+                req,
+                Request({"type": "http", "headers": []}),
+            )
+        assert excinfo.value.status_code == 404
+        assert req.text == "ねえ{cheerful}"
 
 
 # ===================================================================

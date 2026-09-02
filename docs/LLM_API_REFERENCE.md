@@ -123,7 +123,7 @@
 | `max_seconds` | `float` | 任意 | duration predictor 出力の上限秒（`>0`、デフォルト `30.0`） |
 | `duration_scale` | `float` | 任意 | predictor 予測値の倍率（`>0`、デフォルト `1.0`） |
 
-**パラメータ解決順序**: リクエスト値 → 話者 `defaults` → サーバ内部デフォルト（`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`, `min_seconds=0.5`, `max_seconds=30.0`, `duration_scale=1.0`）。`min_seconds > max_seconds` の組み合わせは 422 で拒否される。
+**パラメータ解決順序**: リクエスト値 → 話者 `defaults` → サーバ内部デフォルト（`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`, `min_seconds=0.5`, `max_seconds=30.0`, `duration_scale=1.0`）。`seed` も同じ順序で解決され、負値は「ランダム」を意味する。`min_seconds > max_seconds` の組み合わせ、および `defaults` 由来の `duration_scale` が `0` 以下になる場合は 422 で拒否される。
 
 ---
 
