@@ -1,6 +1,10 @@
 # Refactoring Plan
 
-Status: proposed (2026-09-02). Behavior-preserving refactoring of the largest modules. Each step is one PR and must leave CI green.
+Status: Steps 0 to 3 done (2026-09-02). Step 4 is still open and optional. Behavior-preserving refactoring of the largest modules. Each step is one PR and must leave CI green.
+
+Result so far: `server.py` 1226 to 110 lines, `train.py` 4818 to 2543 lines with `main()` down from 2120 to 200, and the test suite from 76 to 395. Both `--help` outputs are byte-identical to the pre-refactor baseline.
+
+Latent bugs found while moving code are recorded in "Bugs found, not fixed" at the end of this document. None were fixed, since every step was behavior-preserving by contract.
 
 ## Background and constraints
 
@@ -110,6 +114,10 @@ Move argparse construction (about 390 lines) to `training/cli_args.py`. Capture 
 
 This brings `train.py` from 4818 to roughly 1500 lines. Once done, remove `train.py` from the `ruff format` exclude and per-file-ignores in `pyproject.toml` and apply `ruff format`, declaring it diverged per the fork policy. The format diff is large, so make this its own PR.
 
+Done. `train.py` landed at 2543 rather than 1500, because `_run_training_loop` is 835 lines on its own and splitting it further would have meant restructuring the loop rather than moving code. `main()` is 200 lines. The format pass turned out to be six hunks, net four lines, since Steps 2a to 2c had already carried the bulk out of the file; the 24 check violations were 18 complexity ones refused with noqa, two PyTorch naming conventions refused, and four `RUF046` rewrites taken.
+
+One closure stayed behind deliberately. The sample emission closure captures `progress`, which is assigned after the closure is defined, so hoisting it into a function would capture `None` instead, and the `progress is not None` guard would swallow the difference silently.
+
 ### Step 4 (optional, decide later): inference_runtime.py
 
 The file has diverged enough to qualify, but shares a lot with upstream, so splitting it raises merge cost. If done: stage the `synthesize()` function (roughly lines 1214 to 1642, about 430 lines) into phases, and move the checkpoint loading group (`_load_checkpoint_from_pt`, `_load_checkpoint_from_safetensors`, `download_hf_checkpoint`) into an `inference_io.py`. Public names used by the gradio apps, `infer.py`, and `server.py` (`RuntimeKey`, `SamplingRequest`, `get_cached_runtime`, `save_wav`, `resolve_cfg_scales`, and the rest) must be re-exported from `inference_runtime` unchanged.
@@ -148,3 +156,21 @@ uv run pytest -q
 ```
 
 Additionally: after Steps 1 and 4, `python server.py --help` and a `TestClient` smoke of `/health` and `/speakers`; after Steps 2 and 3, diff `python train.py --help` against the pre-change output; import smoke via `uv run python -c "import server, train"`.
+
+## Bugs found, not fixed
+
+Surfaced while writing the characterization tests and moving code. None were fixed, because every step was behavior-preserving by contract, and the tests pin the current behavior rather than the intended one. Ordered by how much damage they can do while staying invisible.
+
+1. `run_validation` restores training mode outside a `try`/`finally`. It records `was_training`, drops the model to `eval()`, and calls `train()` at the end, so an exception anywhere in the validation loop skips the restore. One failed validation leaves the rest of the run training in eval mode, with dropout and batch norm inert and no error raised.
+2. Masked MSE lets NaN through the mask. The reduction multiplies by the mask, and `NaN * 0.0` is `NaN`, so a NaN behind the mask poisons the loss. Finite garbage behind the mask is correctly ignored, which is what makes this easy to miss.
+3. The safetensors branch of `_load_model_state_from_checkpoint` always returns `train_config` as `None` while the `.pt` branch returns it. Harmless today because the only caller discards it, and silently wrong the moment someone initializes from safetensors and reads that value.
+4. `_autopick_prompts_from_manifest` documents itself as deterministic but sorts through a `set`, so texts of equal length order by `PYTHONHASHSEED`. Sample prompts can differ between processes.
+5. Speaker defaults `seed` is dropped by `_merge_defaults`, which has no `seed` key in its skeleton. A per-speaker seed in the config never reaches synthesis.
+6. A relative `lora_dir` resolves against the current working directory rather than the config file's directory, so the same config behaves differently depending on where the server was started.
+7. `duration_scale` bypasses the positive-value filter, so a negative value passes through when supplied via defaults.
+8. `_apply_fade` assumes numpy and raises `AttributeError` on a torch tensor, except for short inputs that hit the early return.
+9. `load_config` raises `AttributeError` on an empty YAML file instead of reporting a bad config.
+10. `_synth_single` mutates `req.text` on the request object it was handed.
+11. `_resolve_speaker_name` is dead code; nothing in the repository calls it.
+
+Two structural notes rather than bugs. The sample emission closure in `main()` works only because of late binding, and will break silently if extracted (see Step 3). Validation accumulates totals with a per-batch `.item()` call, which forces a GPU sync every batch.
