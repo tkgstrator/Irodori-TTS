@@ -56,15 +56,39 @@ def _mel_from_bytes(raw: bytes) -> torch.Tensor:
     return _mel(torch.from_numpy(data)[None], sample_rate)
 
 
-def _best_ncc(source: torch.Tensor, query: torch.Tensor) -> float:
-    """Highest normalized cross-correlation of `query` at any offset in `source`."""
-    if source.shape[1] < query.shape[1]:
-        return NEG_INF
-    unit = query / (query.norm() + 1e-8)
-    numerator = F.conv1d(source[None], unit[None])
-    window = torch.ones(1, 1, query.shape[1])
-    energy = F.conv1d((source**2).sum(0, keepdim=True)[None], window)
-    return float((numerator / energy.clamp_min(1e-8).sqrt()).max())
+class _SourceBank:
+    """All source clips laid end to end so one convolution scores them together.
+
+    Scoring clip by clip means a kernel launch per pair, which the larger
+    speakers cannot afford. Concatenating lets each query run as a single
+    convolution; windows straddling a boundary are simply never read back.
+    """
+
+    def __init__(self, mels: list[torch.Tensor], device: torch.device) -> None:
+        self.lengths = [m.shape[1] for m in mels]
+        self.starts: list[int] = []
+        offset = 0
+        for length in self.lengths:
+            self.starts.append(offset)
+            offset += length
+        self.frames = torch.cat(mels, dim=1).to(device)
+        self.energy = (self.frames**2).sum(0, keepdim=True)[None]
+        self.device = device
+
+    def scores(self, query: torch.Tensor) -> torch.Tensor:
+        """Best NCC of `query` within each clip; NEG_INF where the clip is too short."""
+        span = query.shape[1]
+        out = torch.full((len(self.lengths),), NEG_INF, device=self.device)
+        unit = (query / (query.norm() + 1e-8)).to(self.device)
+        numerator = F.conv1d(self.frames[None], unit[None]).squeeze()
+        window = torch.ones(1, 1, span, device=self.device)
+        denominator = F.conv1d(self.energy, window).squeeze().clamp_min(1e-8).sqrt()
+        correlation = numerator / denominator
+        for i, (start, length) in enumerate(zip(self.starts, self.lengths, strict=True)):
+            if length < span:
+                continue
+            out[i] = correlation[start : start + length - span + 1].max()
+        return out.cpu()
 
 
 def _monotonic_assignment(scores: torch.Tensor) -> list[int]:
@@ -152,14 +176,14 @@ def main() -> None:
     codec = DACVAECodec.load(device=args.device)
     latent_root = args.manifest.parent
 
+    bank = _SourceBank(source_mels, torch.device(args.device))
     scores = torch.full((len(records), len(rows)), NEG_INF)
     for i, record in enumerate(tqdm(records, desc="decode+score")):
         latent = torch.load(latent_root / record["latent_path"], map_location=args.device)
         with torch.no_grad():
             audio = codec.decode_latent(latent.unsqueeze(0).float())
         query = _mel(audio.squeeze()[None].float().cpu(), codec.sample_rate)
-        for j, source in enumerate(source_mels):
-            scores[i, j] = _best_ncc(source, query)
+        scores[i] = bank.scores(query)
 
     assignment = _monotonic_assignment(scores)
 
