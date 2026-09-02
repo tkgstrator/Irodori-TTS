@@ -13,7 +13,7 @@ Whisper large-v3 で字起こしされた `metadata_wts.jsonl` を、Irodori-TTS
 
 1. **入力ファイル** — 対象の `metadata_wts.jsonl`（例: `data/ema/metadata_wts.jsonl`）。`file_name` + `text` の JSONL 形式であること。
 2. **データセットルート** — 出力先。通常は入力ファイルと同じディレクトリ(例: `data/ema/`)。
-3. **話者** — `data/<speaker>/config.yaml` が存在すること。新規話者なら先に作成する必要がある（`speaker.id/name`、`cleaning.first_person`、`cleaning.addressing` を定義）。
+3. **話者** — `data/<speaker>/config.yaml` が存在すること。新規話者なら先に作成する必要がある（`speaker.id`、`speaker.label`、および任意で `cleaning.first_person` / `cleaning.addressing` / `cleaning.characters` を定義）。`cleaning:` ブロックは丸ごと省略可能で、1 演者に複数キャラが混ざるデータでは省略が正しい。スキーマの詳細は `docs/TRAINING.md` の `config.yaml` 節を参照。
 4. **ヒューリスティックパラメータ**（デフォルト提示 → 変更の有無を確認）:
    - `--min-chars 3`
    - `--rep-threshold 0.5`
@@ -42,24 +42,41 @@ Whisper large-v3 で字起こしされた `metadata_wts.jsonl` を、Irodori-TTS
 - 非言語音のみ（`あはは` / `ふぅー` など hiragana+記号のみ）
 - テキスト完全重複
 
+```
+uv run --no-sync python scripts/preprocess/filter_metadata_voice.py \
+  --src <root>/metadata_wts.jsonl \
+  --out <root>/metadata_filtered.jsonl \
+  --rejected <root>/metadata_rejected.jsonl
+```
+
 出力:
 
 - `<root>/metadata_filtered.jsonl` — 残ったレコード
-- `<root>/metadata_rejected.jsonl` — 落としたレコード + 理由
+- `<root>/metadata_rejected.jsonl` — 落としたレコード + 理由（`--rejected` 省略時は `--out` と同じディレクトリの `metadata_rejected.jsonl`）
 
 **non-verbal で落とした件は LLM パスで再評価する。** 短い正当な発話（`うん。`/`はい。`/`えっ？`）が混ざっていることがある。
 
 ### Step B — LLM リライトパス
 
-Sonnet 4.6 を Agent サブエージェントで呼び、汎用プロンプト `.claude/skills/tts-preprocess/voice_cleaning_prompt.md` と当該話者の `data/<speaker>/config.yaml` を合わせて渡す。`metadata_filtered.jsonl` を ~150 レコード単位のバッチに分けて並列処理する。
+Sonnet 4.6 を Agent サブエージェントで呼び、汎用プロンプト `.claude/skills/tts-preprocess/voice_cleaning_prompt.md` と当該話者の `data/<speaker>/config.yaml` を合わせて渡す。バッチ分割は `scripts/clean/split_for_llm.py` で行う:
+
+```
+uv run --no-sync python scripts/clean/split_for_llm.py \
+  --src <root>/metadata_filtered.jsonl \
+  --out-dir <root>/llm_batches \
+  --batch-size 150
+```
 
 汎用プロンプトは話者非依存で、次の判定原則だけをカバーする:
 
 1. バッチ通読 → 文脈ベースの誤字修正
 2. 一人称の音響距離判定（config の `cleaning.first_person` を当てはめる）
 3. 呼称ヒント（config の `cleaning.addressing`: chan/san/kun/yobisute）
-4. 句読点・文末記号（`、` / `。` / `？` / `！`）の補完
-5. 低確度レコードの `suspect:` フラグ
+4. 人名の正規化（config の `cleaning.characters` の `name` / `aliases` を辞書として使う）
+5. 句読点・文末記号（`、` / `。` / `？` / `！`）の補完
+6. 低確度レコードの `suspect:` フラグ
+
+`cleaning:` ブロックが無い config の場合、一人称の正規化は行わず、文脈ベースの誤字修正と句読点補完だけを走らせる（プロンプト側にその分岐がある）。
 
 **話者固有情報（正規名、一人称、呼称規約）は config.yaml が単一のソース・オブ・トゥルース**。汎用プロンプトには特定作品・特定キャラの情報を書かない。新規話者を処理する前に `data/<speaker>/config.yaml` が存在することを確認し、無ければユーザーに一人称・呼称を聞いて作成してから dispatch する。
 
@@ -85,7 +102,14 @@ Sonnet 4.6 を Agent サブエージェントで呼び、汎用プロンプト `
 - 代表的な変更例（先頭 20 件程度）
 - 理由別の内訳（名前正規化 / 句読点 / 誤字修正 …）
 
-承認後、`metadata_filtered.jsonl` に diff を適用して `<root>/metadata.jsonl` を生成する。`metadata_wts.jsonl` はそのまま残す。
+承認後、`scripts/clean/apply_llm_diff.py` で `metadata_filtered.jsonl` に diff を適用して `<root>/metadata.jsonl` を生成する。`metadata_wts.jsonl` はそのまま残す。
+
+```
+uv run --no-sync python scripts/clean/apply_llm_diff.py \
+  --src <root>/metadata_filtered.jsonl \
+  --diff <root>/metadata_llm_diff.jsonl \
+  --out <root>/metadata.jsonl
+```
 
 ### Step D — レポート
 
@@ -95,7 +119,7 @@ Sonnet 4.6 を Agent サブエージェントで呼び、汎用プロンプト `
 - llm: changed=A / total=B
 - final: `<root>/metadata.jsonl` のレコード数
 
-次のステップ（`prepare_manifest.py` で DACVAE latent を用意 → LoRA 学習）を案内する。
+次のステップを案内する。1. `prepare_manifest.py` で `<root>/latents/` と `<root>/manifest.jsonl` を用意する。2. LoRA 学習を回す。具体的なコマンドは `tts-train` スキルを参照。
 
 ## Logging
 
