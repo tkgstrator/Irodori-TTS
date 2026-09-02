@@ -1,5 +1,5 @@
 {
-	"name": "Irodori TTS (CPU)",
+	"name": "Irodori TTS (CUDA)",
 	"dockerComposeFile": ["compose.yaml"],
 	"service": "app",
 	"workspaceFolder": "/home/vscode/app",
@@ -49,7 +49,7 @@
 	},
 	"forwardPorts": [8501],
 	"postAttachCommand": "/bin/sh .devcontainer/postAttachCommand.sh",
-	"postCreateCommand": "/bin/sh .devcontainer/postCreateCommand.sh cpu",
+	"postCreateCommand": "/bin/sh .devcontainer/postCreateCommand.sh cu128",
 	"customizations": {
 		"vscode": {
 			"extensions": [
