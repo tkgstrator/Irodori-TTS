@@ -104,6 +104,11 @@ def generate_training_samples(  # noqa: PLR0913 -- keyword-only API called from 
                 cfg_scale_speaker=float(sample_cfg.cfg_scale_speaker),
                 cfg_guidance_mode=str(sample_cfg.cfg_guidance_mode),
                 seed=prompt.seed,
+                # raw_model already carries the adapter being trained. Without
+                # this the runtime reads "no adapter named" as "serve the base
+                # model" and every sample comes out unadapted, however far the
+                # run has got.
+                keep_adapter=True,
             )
             try:
                 result = runtime.synthesize(req, log_fn=log_fn)

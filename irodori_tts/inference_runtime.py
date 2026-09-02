@@ -253,6 +253,10 @@ class SamplingRequest:
     tail_std_threshold: float = 0.05
     tail_mean_threshold: float = 0.1
     lora_adapter: str | None = None
+    # Leave whatever adapter the model already carries in place. Without this a
+    # request naming no adapter is taken to mean "serve the base model", which
+    # is right for the server but wrong for sampling a model that is mid-training.
+    keep_adapter: bool = False
 
 
 @dataclass
@@ -946,6 +950,7 @@ class InferenceRuntime:
         self,
         adapter_path: str | None,
         *,
+        keep_adapter: bool = False,
         messages: list[str],
         stage_timings: list[tuple[str, float]],
         log_fn: Callable[[str], None],
@@ -955,6 +960,7 @@ class InferenceRuntime:
         try:
             return self._prepare_lora_for_request_inner(
                 adapter_path,
+                keep_adapter=keep_adapter,
                 messages=messages,
                 log_fn=log_fn,
             )
@@ -968,9 +974,12 @@ class InferenceRuntime:
         self,
         adapter_path: str | None,
         *,
+        keep_adapter: bool = False,
         messages: list[str],
         log_fn: Callable[[str], None],
     ) -> Any:
+        if keep_adapter and adapter_path is None:
+            return nullcontext()
         resolved_path = self._resolve_lora_adapter_path(adapter_path)
         if resolved_path is None:
             disable_adapter = getattr(self.model, "disable_adapter", None)
@@ -1362,6 +1371,7 @@ class InferenceRuntime:
             self._infer_lock,
             self._prepare_lora_for_request(
                 req.lora_adapter,
+                keep_adapter=req.keep_adapter,
                 messages=messages,
                 stage_timings=stage_timings,
                 log_fn=_log,
