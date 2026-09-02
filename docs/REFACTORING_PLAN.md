@@ -58,6 +58,9 @@ irodori_tts/
                              # checkpoint resolution, display name resolution
     registry.py              # RuntimeRegistry
     audio.py                 # fade application
+    synthesis.py             # synthesis path lifted out of the build_app closure:
+                             # single and cue synthesis, drama rendering, PCM streaming
+                             # and framing, request validation, route handler bodies
 train.py                     # thin orchestrator, target about 1500 lines (main assembly plus training loop)
 server.py                    # thin shim (build_app plus main, uvicorn startup) kept for docker compatibility
 ```
@@ -81,9 +84,9 @@ Roughly 600 to 900 lines of tests. These test files are independent and can be w
 
 ### Step 1: split server.py (fork-owned, safest)
 
-Move the symbols listed above into `irodori_tts/server/`. Break the large `build_app` closure (roughly lines 594 to 1207) into route handler functions. `server.py` remains as a shim so `python server.py` and its CLI keep working. Route definitions are unchanged. New files must satisfy strict ruff since they are outside the ignore list.
+Move the symbols listed above into `irodori_tts/server/`. Break the large `build_app` closure (roughly lines 594 to 1207) into route handler functions, then move those and the rest of the synthesis path into `synthesis.py`. `server.py` remains as a shim so `python server.py` and its CLI keep working. Route definitions are unchanged. New files must satisfy strict ruff since they are outside the ignore list.
 
-About 600 lines moved plus lint compliance work.
+About 1100 lines moved plus lint compliance work. Done: `server.py` is 110 lines, holding `build_app`, the four route definitions and `main`.
 
 ### Step 2a: extract checkpointing and speaker prompts from train.py
 
