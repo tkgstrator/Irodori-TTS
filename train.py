@@ -10,8 +10,8 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
-from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.nn.functional as F  # noqa: N812
+from torch.nn.parallel import DistributedDataParallel as DDP  # noqa: N817
 from torch.utils.data import DataLoader as TorchDataLoader
 from torch.utils.data import DistributedSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -131,7 +131,7 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def _resolve_configs(
+def _resolve_configs(  # noqa: C901, PLR0912, PLR0915
     *,
     args,
     device,
@@ -739,7 +739,7 @@ def _resolve_configs(
     )
 
 
-def _setup_wandb_and_tokenizers(
+def _setup_wandb_and_tokenizers(  # noqa: C901, PLR0912, PLR0913
     *,
     args,
     distributed,
@@ -758,6 +758,7 @@ def _setup_wandb_and_tokenizers(
     if args.resume is not None:
         try:
             from safetensors import safe_open as _safe_open_for_uuid
+
             _adapter_path = Path(args.resume) / "adapter_model.safetensors"
             if _adapter_path.is_file():
                 with _safe_open_for_uuid(str(_adapter_path), framework="pt", device="cpu") as _f:
@@ -851,7 +852,7 @@ def _setup_wandb_and_tokenizers(
     )
 
 
-def _build_data(
+def _build_data(  # noqa: C901, PLR0912, PLR0913, PLR0915
     *,
     caption_tokenizer,
     device,
@@ -876,11 +877,11 @@ def _build_data(
     ref_max_frames_cfg: int | None = None
     if model_cfg.use_speaker_condition_resolved and train_cfg.ref_max_seconds > 0.0:
         ref_min_frames_cfg = max(
-            1, int(round(float(train_cfg.ref_min_seconds) * _CODEC_FRAMES_PER_SECOND))
+            1, round(float(train_cfg.ref_min_seconds) * _CODEC_FRAMES_PER_SECOND)
         )
         ref_max_frames_cfg = max(
             ref_min_frames_cfg,
-            int(round(float(train_cfg.ref_max_seconds) * _CODEC_FRAMES_PER_SECOND)),
+            round(float(train_cfg.ref_max_seconds) * _CODEC_FRAMES_PER_SECOND),
         )
         if is_main_process:
             print(
@@ -1070,6 +1071,7 @@ def _build_data(
     if len(loader) == 0:
         raise ValueError("Dataloader yielded zero batches. Check manifest and batch_size settings.")
     import math
+
     optim_steps_per_epoch = max(
         1,
         math.ceil(len(loader) / max(1, train_cfg.gradient_accumulation_steps)),
@@ -1092,12 +1094,12 @@ def _build_data(
     if train_cfg.warmup_ratio is not None or train_cfg.decay_ratio is not None:
         ms = int(train_cfg.max_steps)
         warmup = (
-            int(round(ms * float(train_cfg.warmup_ratio)))
+            round(ms * float(train_cfg.warmup_ratio))
             if train_cfg.warmup_ratio is not None
             else int(train_cfg.warmup_steps)
         )
         decay = (
-            int(round(ms * float(train_cfg.decay_ratio)))
+            round(ms * float(train_cfg.decay_ratio))
             if train_cfg.decay_ratio is not None
             else max(0, ms - warmup - int(train_cfg.stable_steps))
         )
@@ -1136,7 +1138,9 @@ def _build_data(
     checkpoint_retention_enabled = train_cfg.checkpoint_best_n > 0
     periodic_checkpoint_keep = 0
     if checkpoint_retention_enabled:
-        periodic_checkpoint_keep = 10_000 if has_validation else int(train_cfg.checkpoint_best_n) + 1
+        periodic_checkpoint_keep = (
+            10_000 if has_validation else int(train_cfg.checkpoint_best_n) + 1
+        )
     best_val_checkpoints: list[tuple[float, int, Path]] = []
     if is_main_process:
         if checkpoint_retention_enabled and has_validation:
@@ -1146,7 +1150,9 @@ def _build_data(
                 train_cfg.checkpoint_best_n,
             )
         if checkpoint_retention_enabled and has_validation:
-            print(f"Checkpoint retention: periodic_keep={periodic_checkpoint_keep} + best_val_loss={train_cfg.checkpoint_best_n}.")
+            print(
+                f"Checkpoint retention: periodic_keep={periodic_checkpoint_keep} + best_val_loss={train_cfg.checkpoint_best_n}."
+            )
         elif checkpoint_retention_enabled:
             print(
                 f"Checkpoint retention: validation disabled, keep latest {periodic_checkpoint_keep} periodic checkpoints."
@@ -1168,7 +1174,7 @@ def _build_data(
     )
 
 
-def _build_model(
+def _build_model(  # noqa: C901, PLR0912, PLR0913, PLR0915
     *,
     args,
     device,
@@ -1500,7 +1506,7 @@ def _build_model(
     )
 
 
-def _run_training_loop(
+def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
     *,
     _maybe_emit_samples,
     args,
@@ -2142,9 +2148,8 @@ def _run_training_loop(
                                         f"best_val={es_best_val:.6f}"
                                     )
                                     stop_early = True
-                                elif (
-                                    es_best_val < float("inf")
-                                    and cur_val > es_best_val * (1.0 + train_cfg.early_stop_regression_ratio)
+                                elif es_best_val < float("inf") and cur_val > es_best_val * (
+                                    1.0 + train_cfg.early_stop_regression_ratio
                                 ):
                                     progress.write(
                                         f"early stop: regression "
@@ -2153,7 +2158,6 @@ def _run_training_loop(
                                         f"at step={step}"
                                     )
                                     stop_early = True
-
 
                         best_val_checkpoints, best_path = maybe_save_best_val_loss_checkpoint(
                             output_dir=output_dir,
