@@ -1,0 +1,32 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # ../../ because this compose file lives in .devcontainer/cuda/, so the
+      # workspace root is two levels up.
+      - ../../:/home/vscode/app:cached
+      # Deliberately not named `venv` like the CPU compose file: if the two
+      # ever land in the same compose project they would share one volume, and
+      # the CPU and cu128 torch builds would overwrite each other in silence.
+      - venv-cuda:/home/vscode/app/.venv
+    # DataLoader workers move latents through shared memory, which the 64MB
+    # default cannot hold.
+    shm_size: 16gb
+    tty: true
+    stdin_open: true
+    # Requires nvidia-container-toolkit on the host.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      WANDB_BASE_URL: https://wandb.tkgstrator.work
+
+volumes:
+  venv-cuda:
+    driver: local
