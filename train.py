@@ -1247,7 +1247,9 @@ def _build_model(  # noqa: C901, PLR0912, PLR0913, PLR0915
             if pretrained_base_path is not None:
                 init_checkpoint_path = pretrained_base_path
                 preloaded_init_checkpoint = _load_model_state_from_checkpoint(init_checkpoint_path)
-                init_state, init_model_cfg, _, init_text_encoder_config = preloaded_init_checkpoint
+                init_state = preloaded_init_checkpoint.model_state
+                init_model_cfg = preloaded_init_checkpoint.model_config
+                init_text_encoder_config = preloaded_init_checkpoint.text_encoder_config
                 checkpoint_uses_pretrained = any(
                     key.startswith("pretrained_text_backbone.") for key in init_state
                 )

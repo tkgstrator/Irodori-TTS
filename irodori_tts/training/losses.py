@@ -26,7 +26,11 @@ def echo_style_masked_mse(
     # Keep normalization stable for degenerate samples with no valid target tokens.
     has_valid = (valid_weight.sum(dim=-1) > 0).float()[:, None]
     denom = (loss_weight * valid_weight * has_valid).mean().clamp_min(1e-6)
-    return (diff * loss_weight).mean() / denom
+    # Zero-fill masked positions instead of multiplying by the mask afterwards:
+    # NaN * 0.0 is NaN, so a NaN behind the mask would poison the whole loss.
+    # Kept positions are untouched, so the unmasked numerics are unchanged.
+    masked_diff = torch.where(loss_mask.bool(), diff, torch.zeros_like(diff))
+    return masked_diff.mean() / denom
 
 
 def utterance_mean_masked_mse(
@@ -37,7 +41,10 @@ def utterance_mean_masked_mse(
     diff = (pred - target) ** 2
     diff = diff.mean(dim=-1)
     weight = valid_mask.float()
-    per_sample = (diff * weight).sum(dim=-1) / weight.sum(dim=-1).clamp_min(1.0)
+    # Zero-fill masked positions instead of multiplying by the mask afterwards:
+    # NaN * 0.0 is NaN, so a NaN behind the mask would poison the whole loss.
+    masked_diff = torch.where(valid_mask.bool(), diff, torch.zeros_like(diff))
+    per_sample = masked_diff.sum(dim=-1) / weight.sum(dim=-1).clamp_min(1.0)
     return per_sample.mean()
 
 

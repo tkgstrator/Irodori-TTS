@@ -28,18 +28,6 @@ def _load_speaker_yaml(manifest_path: str | Path | None) -> dict | None:
         return None
 
 
-def _resolve_speaker_name(manifest_path: str | Path | None) -> str | None:
-    if manifest_path is None:
-        return None
-    speaker_dir = Path(manifest_path).parent
-    speaker_id = speaker_dir.name or None
-    data = _load_speaker_yaml(manifest_path)
-    if data is None:
-        return speaker_id
-    speaker = (data.get("speaker") or {}) if isinstance(data, dict) else {}
-    return speaker.get("label") or speaker.get("name") or speaker.get("id") or speaker_id
-
-
 def _resolve_speaker_id(manifest_path: str | Path | None) -> str | None:
     if manifest_path is None:
         return None
@@ -130,7 +118,9 @@ def _autopick_prompts_from_manifest(
         return []
     candidates = [t for t in texts if min_len <= len(t) <= max_len]
     if not candidates:
-        candidates = sorted(set(texts), key=len)
+        # Sort the manifest-ordered list, not a set: iterating a set of strings
+        # orders equal-length texts by PYTHONHASHSEED.
+        candidates = sorted(texts, key=lambda t: (len(t), t))
     if not candidates:
         return []
     candidates.sort(key=len)

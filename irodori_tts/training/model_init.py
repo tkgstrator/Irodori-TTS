@@ -12,6 +12,7 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
+from typing import NamedTuple
 
 import torch
 import torch.distributed as dist
@@ -228,9 +229,26 @@ def initialize_caption_embedding_from_pretrained(
     )
 
 
+class LoadedCheckpoint(NamedTuple):
+    """Weights plus whatever configs the checkpoint format is able to carry.
+
+    ``train_config_available`` separates "this format has no slot for a train
+    config" (safetensors, which only stores ``config_json`` and
+    ``text_encoder_config_json``) from "the checkpoint simply did not store
+    one" (.pt). Both leave ``train_config`` as ``None``, so without the flag a
+    caller cannot tell a missing config from an unrepresentable one.
+    """
+
+    model_state: dict[str, torch.Tensor]
+    model_config: dict | None
+    train_config: dict | None
+    text_encoder_config: dict | None
+    train_config_available: bool
+
+
 def _load_model_state_from_checkpoint(  # noqa: C901
     path: Path,
-) -> tuple[dict[str, torch.Tensor], dict | None, dict | None, dict | None]:
+) -> LoadedCheckpoint:
     if path.suffix.lower() == ".safetensors":
         from safetensors import safe_open
         from safetensors.torch import load_file as load_safetensors_file
@@ -261,11 +279,12 @@ def _load_model_state_from_checkpoint(  # noqa: C901
             parsed = json.loads(text_encoder_config_json)
             if isinstance(parsed, dict):
                 text_encoder_config = parsed
-        return (
-            load_safetensors_file(str(path), device="cpu"),
-            checkpoint_model_cfg,
-            None,
-            text_encoder_config,
+        return LoadedCheckpoint(
+            model_state=load_safetensors_file(str(path), device="cpu"),
+            model_config=checkpoint_model_cfg,
+            train_config=None,
+            text_encoder_config=text_encoder_config,
+            train_config_available=False,
         )
 
     payload = torch.load(path, map_location="cpu", weights_only=True)
@@ -287,7 +306,13 @@ def _load_model_state_from_checkpoint(  # noqa: C901
     text_encoder_config = payload.get("text_encoder_config")
     if text_encoder_config is not None and not isinstance(text_encoder_config, dict):
         raise ValueError(f"Checkpoint text_encoder_config must be a dictionary: {path}")
-    return raw_model, checkpoint_model_cfg, checkpoint_train_cfg, text_encoder_config
+    return LoadedCheckpoint(
+        model_state=raw_model,
+        model_config=checkpoint_model_cfg,
+        train_config=checkpoint_train_cfg,
+        text_encoder_config=text_encoder_config,
+        train_config_available=True,
+    )
 
 
 def _check_model_config_compatibility(  # noqa: C901, PLR0913
@@ -883,8 +908,7 @@ def _apply_base_initialization(  # noqa: C901, PLR0912, PLR0913, PLR0915
     base_init: dict | None,
     distributed: bool,
     is_main_process: bool,
-    preloaded_checkpoint: tuple[dict[str, torch.Tensor], dict | None, dict | None, dict | None]
-    | None = None,
+    preloaded_checkpoint: LoadedCheckpoint | None = None,
 ) -> None:
     mode = None if base_init is None else base_init.get("mode")
     if mode is None:
@@ -901,10 +925,13 @@ def _apply_base_initialization(  # noqa: C901, PLR0912, PLR0913, PLR0915
         if not isinstance(checkpoint_path, str) or not checkpoint_path:
             raise ValueError("LoRA checkpoint metadata is missing base_init.checkpoint_path.")
         init_path = _normalize_checkpoint_path(checkpoint_path)
-        if preloaded_checkpoint is None:
-            init_state, init_model_cfg, _, _ = _load_model_state_from_checkpoint(init_path)
-        else:
-            init_state, init_model_cfg, _, _ = preloaded_checkpoint
+        loaded = (
+            _load_model_state_from_checkpoint(init_path)
+            if preloaded_checkpoint is None
+            else preloaded_checkpoint
+        )
+        init_state = loaded.model_state
+        init_model_cfg = loaded.model_config
         checkpoint_has_caption = checkpoint_uses_caption_condition(init_model_cfg, init_state)
         current_has_caption = bool(model_cfg.use_caption_condition)
         checkpoint_has_duration = checkpoint_uses_duration_predictor(init_model_cfg, init_state)

@@ -46,13 +46,33 @@ class TestUtteranceMeanMaskedMse:
         loss = losses.utterance_mean_masked_mse(polluted, TARGET, MASK)
         assert loss.item() == pytest.approx(1.75)
 
-    def test_nan_behind_mask_propagates(self) -> None:
-        # Multiplying by a zero weight does not neutralize NaN, so masked-out
-        # NaNs poison the result. Current behavior, not a desirable one.
+    def test_nan_behind_mask_is_ignored(self) -> None:
         polluted = PRED.clone()
         polluted[0, 2, :] = float("nan")
         loss = losses.utterance_mean_masked_mse(polluted, TARGET, MASK)
+        assert loss.item() == pytest.approx(1.75)
+
+    def test_inf_behind_mask_is_ignored(self) -> None:
+        polluted = PRED.clone()
+        polluted[1, 2, :] = float("inf")
+        loss = losses.utterance_mean_masked_mse(polluted, TARGET, MASK)
+        assert loss.item() == pytest.approx(1.75)
+
+    def test_nan_inside_mask_still_propagates(self) -> None:
+        polluted = PRED.clone()
+        polluted[0, 0, :] = float("nan")
+        loss = losses.utterance_mean_masked_mse(polluted, TARGET, MASK)
         assert torch.isnan(loss)
+
+    def test_unmasked_numerics_are_bit_identical(self) -> None:
+        generator = torch.Generator().manual_seed(0)
+        pred = torch.randn(4, 7, 5, generator=generator)
+        target = torch.randn(4, 7, 5, generator=generator)
+        mask = torch.rand(4, 7, generator=generator) > 0.5
+        diff = ((pred - target) ** 2).mean(dim=-1)
+        weight = mask.float()
+        expected = ((diff * weight).sum(dim=-1) / weight.sum(dim=-1).clamp_min(1.0)).mean()
+        assert losses.utterance_mean_masked_mse(pred, target, mask).item() == expected.item()
 
     def test_fully_masked_sample_contributes_zero(self) -> None:
         mask = torch.tensor([[True, True, False], [False, False, False]])
@@ -83,11 +103,38 @@ class TestEchoStyleMaskedMse:
         loss = losses.echo_style_masked_mse(polluted, TARGET, MASK, MASK)
         assert loss.item() == pytest.approx(2.0)
 
-    def test_nan_behind_loss_mask_propagates(self) -> None:
+    def test_nan_behind_loss_mask_is_ignored(self) -> None:
         polluted = PRED.clone()
         polluted[0, 2, :] = float("nan")
         loss = losses.echo_style_masked_mse(polluted, TARGET, MASK, MASK)
+        assert loss.item() == pytest.approx(2.0)
+
+    def test_inf_behind_loss_mask_is_ignored(self) -> None:
+        polluted = PRED.clone()
+        polluted[1, 1, :] = float("inf")
+        loss = losses.echo_style_masked_mse(polluted, TARGET, MASK, MASK)
+        assert loss.item() == pytest.approx(2.0)
+
+    def test_nan_inside_loss_mask_still_propagates(self) -> None:
+        polluted = PRED.clone()
+        polluted[0, 0, :] = float("nan")
+        loss = losses.echo_style_masked_mse(polluted, TARGET, MASK, MASK)
         assert torch.isnan(loss)
+
+    def test_unmasked_numerics_are_bit_identical(self) -> None:
+        generator = torch.Generator().manual_seed(1)
+        pred = torch.randn(4, 7, 5, generator=generator)
+        target = torch.randn(4, 7, 5, generator=generator)
+        loss_mask = torch.rand(4, 7, generator=generator) > 0.4
+        valid_mask = torch.rand(4, 7, generator=generator) > 0.6
+        diff = ((pred - target) ** 2).mean(dim=-1)
+        loss_weight = loss_mask.float()
+        valid_weight = valid_mask.float()
+        has_valid = (valid_weight.sum(dim=-1) > 0).float()[:, None]
+        denom = (loss_weight * valid_weight * has_valid).mean().clamp_min(1e-6)
+        expected = (diff * loss_weight).mean() / denom
+        actual = losses.echo_style_masked_mse(pred, target, loss_mask, valid_mask)
+        assert actual.item() == expected.item()
 
     def test_shorter_valid_span_upweights_loss(self) -> None:
         loss_mask = torch.ones(2, 3, dtype=torch.bool)
