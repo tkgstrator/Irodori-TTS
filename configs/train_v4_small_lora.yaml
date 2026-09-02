@@ -84,8 +84,8 @@ train:
   log_every: 100
   save_every: 1000
   checkpoint_best_n: 5
-  wandb_enabled: false
-  wandb_project:
+  wandb_enabled: true
+  wandb_project: irodori-tts-v4
   wandb_entity:
   wandb_run_name:
   wandb_mode: online
