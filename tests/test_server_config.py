@@ -22,21 +22,23 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from safetensors.torch import save_file
 
-from server import (
+from irodori_tts.server.audio import _apply_fade
+from irodori_tts.server.config import (
     _LORA_UUID_NAMESPACE,
     SpeakerSpec,
-    SynthRequest,
-    VdsDefaults,
-    VdsScriptBody,
-    _apply_fade,
     _discover_lora_dir,
-    _merge_defaults,
     _resolve_checkpoint,
     _resolve_lora_display_name,
-    build_app,
     load_config,
     resolve_base_checkpoint,
 )
+from irodori_tts.server.schemas import (
+    SynthRequest,
+    VdsDefaults,
+    VdsScriptBody,
+    _merge_defaults,
+)
+from server import build_app
 
 UUID_A = "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb"
 UUID_B = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
