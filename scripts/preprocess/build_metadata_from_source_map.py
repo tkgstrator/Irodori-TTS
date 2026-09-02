@@ -5,6 +5,7 @@ for the trimmed dataset.
 
 Skips records whose original file was dropped during preprocess.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -16,13 +17,21 @@ from pathlib import Path
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--source-map", required=True, help="path to _source_map.tsv")
-    p.add_argument("--raw-metadata", required=True, help="path to original metadata.jsonl with {file_name, text, ...}")
+    p.add_argument(
+        "--raw-metadata",
+        required=True,
+        help="path to original metadata.jsonl with {file_name, text, ...}",
+    )
     p.add_argument("--out", required=True, help="output metadata jsonl")
-    p.add_argument("--audio-dir", required=True, help="directory the trimmed ogg files live in (used to build the 'audio' path)")
+    p.add_argument(
+        "--audio-dir",
+        required=True,
+        help="directory the trimmed ogg files live in (used to build the 'audio' path)",
+    )
     args = p.parse_args()
 
     raw = {}
-    with open(args.raw_metadata, encoding="utf-8") as f:
+    with Path(args.raw_metadata).open(encoding="utf-8") as f:
         for line in f:
             rec = json.loads(line)
             raw[rec["file_name"]] = rec.get("text", "")
@@ -30,7 +39,10 @@ def main() -> None:
     audio_dir = args.audio_dir.rstrip("/")
     n_out = 0
     n_missing = 0
-    with open(args.source_map, encoding="utf-8") as fmap, open(args.out, "w", encoding="utf-8") as fo:
+    with (
+        Path(args.source_map).open(encoding="utf-8") as fmap,
+        Path(args.out).open("w", encoding="utf-8") as fo,
+    ):
         reader = csv.DictReader(fmap, delimiter="\t")
         for row in reader:
             seq = row["seq"]

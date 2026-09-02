@@ -9,7 +9,7 @@ dependencies = [
     "dacvae",
     "datasets>=3.0.0",
     "gradio>=5.0.0",
-    "huggingface-hub>=0.34.0,<1.0",
+    "huggingface-hub>=0.34.0",
     "llvmlite>=0.40.0",
     "numba>=0.57.0",
     "peft>=0.18.0",
@@ -21,28 +21,100 @@ dependencies = [
     "silentcipher @ git+https://github.com/SesameAILabs/silentcipher.git@d46d7d0893a583d8968ab3a6626e2289faec9152",
     "torch>=2.10.0",
     "torchaudio>=2.10.0",
-    "torchcodec>=0.10.0",
-    "transformers<5",
+    "torchcodec>=0.10.0,<0.11.0",
+    "transformers>=5.12.1,<6",
     "tqdm>=4.67.3",
     "wandb>=0.17.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "rapidfuzz>=3.14.5",
+    "torchdata>=0.11.0",
 ]
 
 [project.optional-dependencies]
+cpu = [
+    "torch>=2.10.0,<2.11.0",
+    "torchao>=0.16.0,<0.17.0",
+    "torchaudio>=2.10.0,<2.11.0",
+    "torchcodec>=0.10.0,<0.11.0",
+]
+cu128 = [
+    "torch>=2.10.0,<2.11.0",
+    "torchao>=0.16.0,<0.17.0",
+    "torchaudio>=2.10.0,<2.11.0",
+    "torchcodec>=0.10.0,<0.11.0",
+]
+rocm = [
+    "torch>=2.10.0,<2.11.0",
+    "torchao>=0.16.0,<0.17.0",
+    "torchaudio>=2.10.0,<2.11.0",
+    "torchcodec>=0.10.0,<0.11.0",
+    "pytorch-triton-rocm>=3.5.1; sys_platform == 'linux'",
+    "triton-rocm>=3.6.0; sys_platform == 'linux'",
+]
+xpu = [
+    "torch>=2.10.0,<2.11.0; sys_platform == 'linux' or sys_platform == 'win32'",
+    "torchao>=0.16.0,<0.17.0; sys_platform == 'linux' or sys_platform == 'win32'",
+    "torchaudio>=2.10.0,<2.11.0; sys_platform == 'linux' or sys_platform == 'win32'",
+    "torchcodec>=0.10.0,<0.11.0; sys_platform == 'linux' or sys_platform == 'win32'",
+    "triton-xpu==3.6.0; sys_platform == 'linux' or sys_platform == 'win32'",
+]
 dev = [
-    "ruff>=0.9.0",
+    "ruff>=0.16.5,<0.17",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cu128" },
+        { extra = "rocm" },
+        { extra = "xpu" },
+    ],
 ]
 
 [tool.uv.sources]
-torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }]
-torchaudio = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-xpu", extra = "xpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchaudio = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-xpu", extra = "xpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+pytorch-triton-rocm = [
+    { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
+]
+triton-rocm = [
+    { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
+]
+triton-xpu = [
+    { index = "pytorch-xpu", extra = "xpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
 dacvae = { git = "https://github.com/facebookresearch/dacvae" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.1"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-xpu"
+url = "https://download.pytorch.org/whl/xpu"
 explicit = true
 
 [tool.ruff]
@@ -58,20 +130,87 @@ select = [
     "B",
     "C4",
     "UP",
+    "C90",
+    "PL",
+    "SIM",
+    "RET",
+    "ARG",
+    "PTH",
+    "RUF",
+    "N",
+    "A",
+    "ISC",
+    "ICN",
+    "PIE",
+    "TID",
+    "PERF",
+    "FURB",
+    "LOG",
+    "G",
+    "DTZ",
+    "TRY",
+    "SLF",
 ]
 ignore = [
     "E501",
     "B008",
-    "C901",
+    "PLR2004",
+    "PLC0415",
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    "TRY003",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 
+# Files inherited from Aratako/Irodori-TTS keep the original baseline rules only.
+# Reformatting them here would conflict on every upstream merge. Drop a file from
+# these lists once it has genuinely diverged and is maintained by this fork.
+"{convert_checkpoint_to_safetensors,gradio_app,gradio_app_voicedesign,infer,prepare_manifest,quantize_checkpoint,train}.py" = [
+    "C90", "PL", "SIM", "RET", "ARG", "PTH", "RUF",
+    "N", "A", "ISC", "ICN", "PIE", "TID",
+    "PERF", "FURB", "LOG", "G", "DTZ", "TRY", "SLF",
+]
+"irodori_tts/{codec,config,dataset,duration,gradio_emoji_palette,inference_runtime,lora,model,optim,progress,quantization,rf,speaker_inversion,text_normalization,tokenizer,watermark}.py" = [
+    "C90", "PL", "SIM", "RET", "ARG", "PTH", "RUF",
+    "N", "A", "ISC", "ICN", "PIE", "TID",
+    "PERF", "FURB", "LOG", "G", "DTZ", "TRY", "SLF",
+]
+
 [tool.ruff.lint.isort]
 known-first-party = ["irodori_tts"]
 
 [tool.ruff.format]
+# Upstream-inherited files are left byte-for-byte as they arrive, so that merges
+# from Aratako/Irodori-TTS stay reviewable. Keep in sync with per-file-ignores.
+exclude = [
+    "convert_checkpoint_to_safetensors.py",
+    "gradio_app.py",
+    "gradio_app_voicedesign.py",
+    "infer.py",
+    "prepare_manifest.py",
+    "quantize_checkpoint.py",
+    "train.py",
+    "irodori_tts/codec.py",
+    "irodori_tts/config.py",
+    "irodori_tts/dataset.py",
+    "irodori_tts/duration.py",
+    "irodori_tts/gradio_emoji_palette.py",
+    "irodori_tts/inference_runtime.py",
+    "irodori_tts/__init__.py",
+    "irodori_tts/lora.py",
+    "irodori_tts/model.py",
+    "irodori_tts/optim.py",
+    "irodori_tts/progress.py",
+    "irodori_tts/quantization.py",
+    "irodori_tts/rf.py",
+    "irodori_tts/speaker_inversion.py",
+    "irodori_tts/text_normalization.py",
+    "irodori_tts/tokenizer.py",
+    "irodori_tts/watermark.py",
+]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
@@ -88,3 +227,6 @@ dev = [
     "onnxruntime<1.23",
     "pytest>=9.0.3",
 ]
+
+[tool.setuptools]
+packages = ["irodori_tts"]

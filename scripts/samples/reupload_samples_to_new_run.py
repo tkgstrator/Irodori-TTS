@@ -7,6 +7,7 @@ prompt, with the checkpoint's true training step as the log step. This gives
 wandb's media panel a single audio widget per prompt with a step slider, the
 way p1atdev's character run does it.
 """
+
 from __future__ import annotations
 
 import argparse

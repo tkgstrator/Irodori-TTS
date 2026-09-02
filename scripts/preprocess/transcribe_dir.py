@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Transcribe a flat directory of audio with faster-whisper + word-level punctuation."""
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
-
 import subprocess
+from pathlib import Path
 
 from faster_whisper import WhisperModel
 from tqdm import tqdm
@@ -14,11 +14,13 @@ from tqdm import tqdm
 
 def probe_duration(path: Path) -> float:
     r = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", str(path)],
-        capture_output=True, text=True, check=True,
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return float(r.stdout.strip())
+
 
 TRAILING_PUNCT = set("、。,.!！?？…")
 
@@ -52,8 +54,7 @@ def build_text(words: list, short_gap: float, long_gap: float) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--audio-dir", required=True)
-    parser.add_argument("--output", default=None,
-                        help="Default: <audio-dir>/metadata_wts.jsonl")
+    parser.add_argument("--output", default=None, help="Default: <audio-dir>/metadata_wts.jsonl")
     parser.add_argument("--glob", default="*.ogg")
     parser.add_argument("--model", default="large-v3")
     parser.add_argument("--device", default="cuda")
@@ -74,11 +75,11 @@ def main() -> None:
     done: set[str] = set()
     if output.exists():
         with output.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
+            for raw_line in f:
+                stripped_line = raw_line.strip()
+                if not stripped_line:
                     continue
-                done.add(json.loads(line)["file_name"])
+                done.add(json.loads(stripped_line)["file_name"])
         print(f"Resuming: {len(done)} already transcribed")
 
     model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)

@@ -16,6 +16,7 @@ Usage:
     uv run python scripts/dataset/make_speaker_archives.py \
         --speakers ema,sherry,hiro,margo,leia,coco,alisa,hanna,meruru,nanoka,miria,noah,yuki,anan,cherry
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,11 +43,11 @@ def build_archive(speaker: str, data_root: Path, out_dir: Path) -> Path:
     referenced: list[str] = []
     missing: list[str] = []
     with manifest_path.open() as f:
-        for line in f:
-            line = line.strip()
-            if not line:
+        for raw_line in f:
+            stripped_line = raw_line.strip()
+            if not stripped_line:
                 continue
-            rec = json.loads(line)
+            rec = json.loads(stripped_line)
             lp = rec.get("latent_path")
             if not lp:
                 raise ValueError(f"{manifest_path}: record without latent_path")

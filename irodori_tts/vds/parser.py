@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .shortcodes import expand_shortcodes
 from .types import (
@@ -88,7 +88,9 @@ def _parse_synth_options(raw: str, lineno: int) -> SynthOptions:
         try:
             pairs[key] = _parse_number(val_str)
         except ValueError as exc:
-            raise ParseError(lineno, f"option value for {key!r} is not a number: {val_str!r}") from exc
+            raise ParseError(
+                lineno, f"option value for {key!r} is not a number: {val_str!r}"
+            ) from exc
     return SynthOptions(**pairs)  # type: ignore[arg-type]
 
 
@@ -111,7 +113,9 @@ def _parse_defaults(raw: str, lineno: int) -> Defaults:
         try:
             synth_pairs[key] = _parse_number(val_str)
         except ValueError as exc:
-            raise ParseError(lineno, f"defaults value for {key!r} is not a number: {val_str!r}") from exc
+            raise ParseError(
+                lineno, f"defaults value for {key!r} is not a number: {val_str!r}"
+            ) from exc
     return Defaults(gap=gap, synth=SynthOptions(**synth_pairs))  # type: ignore[arg-type]
 
 
@@ -123,7 +127,126 @@ def _parse_speaker_ref(raw: str, lineno: int) -> SpeakerRef:
     uuid_val = raw.strip()
     if UUID_RE.match(uuid_val):
         return LoraSpeaker(uuid=uuid_val)
-    raise ParseError(lineno, f"speaker value must be a UUID or caption \"...\", got: {raw!r}")
+    raise ParseError(lineno, f'speaker value must be a UUID or caption "...", got: {raw!r}')
+
+
+def _unused_speaker_and_count_warnings(
+    speakers: dict[str, SpeakerRef], cues: list[Cue]
+) -> list[ParseWarning]:
+    warnings: list[ParseWarning] = []
+    used_aliases = {c.speaker for c in cues if isinstance(c, SpeechCue)}
+    warnings.extend(
+        ParseWarning(0, f"unused speaker alias: {alias!r}")
+        for alias in speakers
+        if alias not in used_aliases
+    )
+    speech_count = sum(1 for c in cues if isinstance(c, SpeechCue))
+    if speech_count > 100:
+        warnings.append(
+            ParseWarning(0, f"script has {speech_count} speech cues (recommended max: 100)")
+        )
+    return warnings
+
+
+@dataclass
+class _TextParserState:
+    version: int | None = None
+    title: str | None = None
+    defaults: Defaults = field(default_factory=Defaults)
+    speakers: dict[str, SpeakerRef] = field(default_factory=dict)
+    cues: list[Cue] = field(default_factory=list)
+    first_cue_seen: bool = False
+    prev_was_pause: bool = False
+    warnings: list[ParseWarning] = field(default_factory=list)
+
+
+def _apply_version_directive(state: _TextParserState, value: str, lineno: int) -> None:
+    try:
+        version = int(value)
+    except ValueError as exc:
+        raise ParseError(lineno, f"version must be an integer, got {value!r}") from exc
+    if version != 1:
+        raise ParseError(lineno, f"unsupported version: {version}")
+    state.version = version
+
+
+def _apply_speaker_directive(state: _TextParserState, value: str, lineno: int) -> None:
+    if state.first_cue_seen:
+        raise ParseError(lineno, "@speaker must appear before the first cue")
+    sm = SPEAKER_RE.match(value)
+    if not sm:
+        raise ParseError(lineno, f"malformed @speaker: {value!r}")
+    alias, ref_raw = sm.group(1), sm.group(2).strip()
+    if not ALIAS_RE.match(alias):
+        raise ParseError(lineno, f"invalid alias: {alias!r}")
+    if alias in state.speakers:
+        raise ParseError(lineno, f"duplicate speaker alias: {alias!r}")
+    state.speakers[alias] = _parse_speaker_ref(ref_raw, lineno)
+
+
+def _apply_defaults_directive(state: _TextParserState, value: str, lineno: int) -> None:
+    if state.first_cue_seen:
+        raise ParseError(lineno, "@defaults must appear before the first cue")
+    state.defaults = _parse_defaults(value, lineno)
+
+
+def _apply_directive(state: _TextParserState, key: str, value: str, lineno: int) -> None:
+    if key == "version":
+        _apply_version_directive(state, value, lineno)
+        return
+    if key == "title":
+        state.title = value
+        return
+    if key == "scene":
+        state.cues.append(SceneCue(name=value))
+        state.prev_was_pause = False
+        return
+    if key == "speaker":
+        _apply_speaker_directive(state, value, lineno)
+        return
+    if key == "defaults":
+        _apply_defaults_directive(state, value, lineno)
+        return
+    raise ParseError(lineno, f"unknown directive: @{key}")
+
+
+def _apply_pause_line(state: _TextParserState, line: str, lineno: int) -> bool:
+    pm = PAUSE_RE.match(line)
+    if not pm:
+        return False
+    try:
+        duration = float(pm.group(1))
+    except ValueError as exc:
+        raise ParseError(lineno, f"pause duration is not a number: {pm.group(1)!r}") from exc
+    if duration <= 0:
+        raise ParseError(lineno, f"pause duration must be positive, got {duration}")
+    if state.prev_was_pause:
+        state.warnings.append(ParseWarning(lineno, "consecutive pauses (values will be summed)"))
+    state.cues.append(PauseCue(duration=duration))
+    state.prev_was_pause = True
+    return True
+
+
+def _apply_cue_line(state: _TextParserState, line: str, lineno: int) -> bool:
+    cm = CUE_RE.match(line)
+    if not cm:
+        return False
+    alias, opts_raw, text = cm.group(1), cm.group(2), cm.group(3).strip()
+    if alias not in state.speakers:
+        raise ParseError(lineno, f"undefined speaker alias: {alias!r}")
+    if not text:
+        raise ParseError(lineno, "cue text must not be empty")
+    options = _parse_synth_options(opts_raw, lineno) if opts_raw else None
+    text = expand_shortcodes(text)
+    state.cues.append(SpeechCue(speaker=alias, text=text, options=options))
+    state.first_cue_seen = True
+    state.prev_was_pause = False
+
+    if len(text) > _CUE_LENGTH_WARN_CHARS:
+        state.warnings.append(
+            ParseWarning(lineno, f"cue text is {len(text)} chars (may exceed 30s)")
+        )
+    return True
 
 
 def parse_text(source: str) -> tuple[VdsScript, list[ParseWarning]]:
@@ -132,16 +255,8 @@ def parse_text(source: str) -> tuple[VdsScript, list[ParseWarning]]:
     Returns the parsed script and a list of warnings.
     Raises ``ParseError`` on fatal validation failures.
     """
-    warnings: list[ParseWarning] = []
     lines = source.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-
-    version: int | None = None
-    title: str | None = None
-    defaults = Defaults()
-    speakers: dict[str, SpeakerRef] = {}
-    cues: list[Cue] = []
-    first_cue_seen = False
-    prev_was_pause = False
+    state = _TextParserState()
 
     for lineno_0, raw_line in enumerate(lines):
         lineno = lineno_0 + 1
@@ -150,111 +265,32 @@ def parse_text(source: str) -> tuple[VdsScript, list[ParseWarning]]:
         if not line or line.startswith("#"):
             continue
 
-        # --- directives ---
         if line.startswith("@"):
             dm = DIRECTIVE_RE.match(line)
             if not dm:
                 raise ParseError(lineno, f"malformed directive: {line!r}")
-            key, value = dm.group(1), dm.group(2).strip()
-
-            if key == "version":
-                try:
-                    version = int(value)
-                except ValueError as exc:
-                    raise ParseError(lineno, f"version must be an integer, got {value!r}") from exc
-                if version != 1:
-                    raise ParseError(lineno, f"unsupported version: {version}")
-                continue
-
-            if key == "title":
-                title = value
-                continue
-
-            if key == "scene":
-                cues.append(SceneCue(name=value))
-                prev_was_pause = False
-                continue
-
-            if key == "speaker":
-                if first_cue_seen:
-                    raise ParseError(lineno, "@speaker must appear before the first cue")
-                sm = SPEAKER_RE.match(value)
-                if not sm:
-                    raise ParseError(lineno, f"malformed @speaker: {value!r}")
-                alias, ref_raw = sm.group(1), sm.group(2).strip()
-                if not ALIAS_RE.match(alias):
-                    raise ParseError(lineno, f"invalid alias: {alias!r}")
-                if alias in speakers:
-                    raise ParseError(lineno, f"duplicate speaker alias: {alias!r}")
-                speakers[alias] = _parse_speaker_ref(ref_raw, lineno)
-                continue
-
-            if key == "defaults":
-                if first_cue_seen:
-                    raise ParseError(lineno, "@defaults must appear before the first cue")
-                defaults = _parse_defaults(value, lineno)
-                continue
-
-            raise ParseError(lineno, f"unknown directive: @{key}")
-
-        # --- pause ---
-        pm = PAUSE_RE.match(line)
-        if pm:
-            try:
-                duration = float(pm.group(1))
-            except ValueError as exc:
-                raise ParseError(lineno, f"pause duration is not a number: {pm.group(1)!r}") from exc
-            if duration <= 0:
-                raise ParseError(lineno, f"pause duration must be positive, got {duration}")
-            if prev_was_pause:
-                warnings.append(ParseWarning(lineno, "consecutive pauses (values will be summed)"))
-            cues.append(PauseCue(duration=duration))
-            prev_was_pause = True
+            _apply_directive(state, dm.group(1), dm.group(2).strip(), lineno)
             continue
 
-        # --- cue ---
-        cm = CUE_RE.match(line)
-        if cm:
-            alias, opts_raw, text = cm.group(1), cm.group(2), cm.group(3).strip()
-            if alias not in speakers:
-                raise ParseError(lineno, f"undefined speaker alias: {alias!r}")
-            if not text:
-                raise ParseError(lineno, "cue text must not be empty")
-            options = _parse_synth_options(opts_raw, lineno) if opts_raw else None
-            text = expand_shortcodes(text)
-            cues.append(SpeechCue(speaker=alias, text=text, options=options))
-            first_cue_seen = True
-            prev_was_pause = False
+        if _apply_pause_line(state, line, lineno):
+            continue
 
-            if len(text) > _CUE_LENGTH_WARN_CHARS:
-                warnings.append(
-                    ParseWarning(lineno, f"cue text is {len(text)} chars (may exceed 30s)")
-                )
+        if _apply_cue_line(state, line, lineno):
             continue
 
         raise ParseError(lineno, f"unrecognised line: {line!r}")
 
-    # --- post-parse validation ---
-    if version is None:
+    if state.version is None:
         raise ParseError(0, "@version directive is required")
 
-    used_aliases = {c.speaker for c in cues if isinstance(c, SpeechCue)}
-    for alias in speakers:
-        if alias not in used_aliases:
-            warnings.append(ParseWarning(0, f"unused speaker alias: {alias!r}"))
-
-    speech_count = sum(1 for c in cues if isinstance(c, SpeechCue))
-    if speech_count > 100:
-        warnings.append(
-            ParseWarning(0, f"script has {speech_count} speech cues (recommended max: 100)")
-        )
+    warnings = state.warnings + _unused_speaker_and_count_warnings(state.speakers, state.cues)
 
     return VdsScript(
-        version=version,
-        title=title,
-        defaults=defaults,
-        speakers=speakers,
-        cues=cues,
+        version=state.version,
+        title=state.title,
+        defaults=state.defaults,
+        speakers=state.speakers,
+        cues=state.cues,
     ), warnings
 
 
@@ -281,7 +317,7 @@ def _json_speaker_ref(raw: dict, path: str) -> SpeakerRef:
         if extra:
             raise ParseError(0, f"{path}: unexpected fields: {extra}")
         return CaptionSpeaker(caption=caption)
-    raise ParseError(0, f"{path}: 'type' must be \"lora\" or \"caption\", got {ref_type!r}")
+    raise ParseError(0, f'{path}: \'type\' must be "lora" or "caption", got {ref_type!r}')
 
 
 def _json_synth_options(raw: dict, path: str) -> SynthOptions:
@@ -297,51 +333,57 @@ def _json_synth_options(raw: dict, path: str) -> SynthOptions:
     return SynthOptions(**pairs)  # type: ignore[arg-type]
 
 
+def _check_no_extra_fields(raw: dict, allowed: set[str], path: str) -> None:
+    extra = set(raw.keys()) - allowed
+    if extra:
+        raise ParseError(0, f"{path}: unexpected fields: {extra}")
+
+
+def _json_cue_speech(raw: dict, path: str) -> SpeechCue:
+    speaker = raw.get("speaker")
+    if not isinstance(speaker, str):
+        raise ParseError(0, f"{path}: 'speaker' must be a string")
+    text = raw.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise ParseError(0, f"{path}: 'text' must be a non-empty string")
+    opts = None
+    if "options" in raw:
+        if not isinstance(raw["options"], dict):
+            raise ParseError(0, f"{path}.options: must be an object")
+        opts = _json_synth_options(raw["options"], f"{path}.options")
+    _check_no_extra_fields(raw, {"kind", "speaker", "text", "options"}, path)
+    return SpeechCue(speaker=speaker, text=expand_shortcodes(text.strip()), options=opts)
+
+
+def _json_cue_pause(raw: dict, path: str) -> PauseCue:
+    duration = raw.get("duration")
+    if not isinstance(duration, (int, float)) or duration <= 0:
+        raise ParseError(0, f"{path}: 'duration' must be a positive number")
+    _check_no_extra_fields(raw, {"kind", "duration"}, path)
+    return PauseCue(duration=float(duration))
+
+
+def _json_cue_scene(raw: dict, path: str) -> SceneCue:
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ParseError(0, f"{path}: 'name' must be a non-empty string")
+    _check_no_extra_fields(raw, {"kind", "name"}, path)
+    return SceneCue(name=name.strip())
+
+
 def _json_cue(raw: dict, idx: int) -> Cue:
     path = f"cues[{idx}]"
     kind = raw.get("kind")
     if kind == "speech":
-        speaker = raw.get("speaker")
-        if not isinstance(speaker, str):
-            raise ParseError(0, f"{path}: 'speaker' must be a string")
-        text = raw.get("text")
-        if not isinstance(text, str) or not text.strip():
-            raise ParseError(0, f"{path}: 'text' must be a non-empty string")
-        opts = None
-        if "options" in raw:
-            if not isinstance(raw["options"], dict):
-                raise ParseError(0, f"{path}.options: must be an object")
-            opts = _json_synth_options(raw["options"], f"{path}.options")
-        extra = set(raw.keys()) - {"kind", "speaker", "text", "options"}
-        if extra:
-            raise ParseError(0, f"{path}: unexpected fields: {extra}")
-        return SpeechCue(speaker=speaker, text=expand_shortcodes(text.strip()), options=opts)
+        return _json_cue_speech(raw, path)
     if kind == "pause":
-        duration = raw.get("duration")
-        if not isinstance(duration, (int, float)) or duration <= 0:
-            raise ParseError(0, f"{path}: 'duration' must be a positive number")
-        extra = set(raw.keys()) - {"kind", "duration"}
-        if extra:
-            raise ParseError(0, f"{path}: unexpected fields: {extra}")
-        return PauseCue(duration=float(duration))
+        return _json_cue_pause(raw, path)
     if kind == "scene":
-        name = raw.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise ParseError(0, f"{path}: 'name' must be a non-empty string")
-        extra = set(raw.keys()) - {"kind", "name"}
-        if extra:
-            raise ParseError(0, f"{path}: unexpected fields: {extra}")
-        return SceneCue(name=name.strip())
-    raise ParseError(0, f"{path}: 'kind' must be \"speech\", \"pause\", or \"scene\", got {kind!r}")
+        return _json_cue_scene(raw, path)
+    raise ParseError(0, f'{path}: \'kind\' must be "speech", "pause", or "scene", got {kind!r}')
 
 
-def parse_json(source: str | dict) -> tuple[VdsScript, list[ParseWarning]]:
-    """Parse a VDS-JSON document into internal representation.
-
-    *source* can be a JSON string or an already-parsed dict.
-    Returns the parsed script and a list of warnings.
-    Raises ``ParseError`` on validation failures.
-    """
+def _load_json_data(source: str | dict) -> dict:
     if isinstance(source, str):
         try:
             data = json.loads(source)
@@ -349,35 +391,41 @@ def parse_json(source: str | dict) -> tuple[VdsScript, list[ParseWarning]]:
             raise ParseError(0, f"invalid JSON: {exc}") from exc
     else:
         data = source
-
     if not isinstance(data, dict):
         raise ParseError(0, "top-level value must be an object")
+    return data
 
-    # version (required)
+
+def _parse_json_version(data: dict) -> int:
     version = data.get("version")
     if version is None:
         raise ParseError(0, "'version' is required")
     if version != 1:
         raise ParseError(0, f"unsupported version: {version}")
+    return version
 
-    # title (optional)
+
+def _parse_json_title(data: dict) -> str | None:
     title = data.get("title")
     if title is not None and not isinstance(title, str):
         raise ParseError(0, "'title' must be a string")
+    return title
 
-    # defaults (optional)
-    defaults = Defaults()
-    if "defaults" in data:
-        raw_defaults = data["defaults"]
-        if not isinstance(raw_defaults, dict):
-            raise ParseError(0, "'defaults' must be an object")
-        gap = raw_defaults.get("gap", 1.0)
-        if not isinstance(gap, (int, float)) or gap < 0:
-            raise ParseError(0, "'defaults.gap' must be a non-negative number")
-        synth = _json_synth_options(raw_defaults, "defaults")
-        defaults = Defaults(gap=float(gap), synth=synth)
 
-    # speakers (required)
+def _parse_json_defaults(data: dict) -> Defaults:
+    if "defaults" not in data:
+        return Defaults()
+    raw_defaults = data["defaults"]
+    if not isinstance(raw_defaults, dict):
+        raise ParseError(0, "'defaults' must be an object")
+    gap = raw_defaults.get("gap", 1.0)
+    if not isinstance(gap, (int, float)) or gap < 0:
+        raise ParseError(0, "'defaults.gap' must be a non-negative number")
+    synth = _json_synth_options(raw_defaults, "defaults")
+    return Defaults(gap=float(gap), synth=synth)
+
+
+def _parse_json_speakers(data: dict) -> dict[str, SpeakerRef]:
     raw_speakers = data.get("speakers")
     if not isinstance(raw_speakers, dict):
         raise ParseError(0, "'speakers' must be an object")
@@ -388,8 +436,10 @@ def parse_json(source: str | dict) -> tuple[VdsScript, list[ParseWarning]]:
         if not isinstance(ref_raw, dict):
             raise ParseError(0, f"speakers.{alias}: must be an object")
         speakers[alias] = _json_speaker_ref(ref_raw, f"speakers.{alias}")
+    return speakers
 
-    # cues (required)
+
+def _parse_json_cues(data: dict) -> list[Cue]:
     raw_cues = data.get("cues")
     if not isinstance(raw_cues, list):
         raise ParseError(0, "'cues' must be an array")
@@ -398,24 +448,17 @@ def parse_json(source: str | dict) -> tuple[VdsScript, list[ParseWarning]]:
         if not isinstance(raw_cue, dict):
             raise ParseError(0, f"cues[{idx}]: must be an object")
         cues.append(_json_cue(raw_cue, idx))
+    return cues
 
-    # --- post-parse validation ---
-    warnings: list[ParseWarning] = []
 
+def _check_json_speakers_defined(cues: list[Cue], speakers: dict[str, SpeakerRef]) -> None:
     for idx, cue in enumerate(cues):
         if isinstance(cue, SpeechCue) and cue.speaker not in speakers:
             raise ParseError(0, f"cues[{idx}]: undefined speaker alias: {cue.speaker!r}")
 
-    used_aliases = {c.speaker for c in cues if isinstance(c, SpeechCue)}
-    for alias in speakers:
-        if alias not in used_aliases:
-            warnings.append(ParseWarning(0, f"unused speaker alias: {alias!r}"))
 
-    speech_count = sum(1 for c in cues if isinstance(c, SpeechCue))
-    if speech_count > 100:
-        warnings.append(
-            ParseWarning(0, f"script has {speech_count} speech cues (recommended max: 100)")
-        )
+def _json_cue_warnings(cues: list[Cue]) -> list[ParseWarning]:
+    warnings: list[ParseWarning] = []
 
     prev_pause = False
     for idx, cue in enumerate(cues):
@@ -428,11 +471,33 @@ def parse_json(source: str | dict) -> tuple[VdsScript, list[ParseWarning]]:
         else:
             prev_pause = False
 
-    for idx, cue in enumerate(cues):
-        if isinstance(cue, SpeechCue) and len(cue.text) > _CUE_LENGTH_WARN_CHARS:
-            warnings.append(
-                ParseWarning(0, f"cues[{idx}]: cue text is {len(cue.text)} chars (may exceed 30s)")
-            )
+    warnings.extend(
+        ParseWarning(0, f"cues[{idx}]: cue text is {len(cue.text)} chars (may exceed 30s)")
+        for idx, cue in enumerate(cues)
+        if isinstance(cue, SpeechCue) and len(cue.text) > _CUE_LENGTH_WARN_CHARS
+    )
+    return warnings
+
+
+def parse_json(source: str | dict) -> tuple[VdsScript, list[ParseWarning]]:
+    """Parse a VDS-JSON document into internal representation.
+
+    *source* can be a JSON string or an already-parsed dict.
+    Returns the parsed script and a list of warnings.
+    Raises ``ParseError`` on validation failures.
+    """
+    data = _load_json_data(source)
+
+    version = _parse_json_version(data)
+    title = _parse_json_title(data)
+    defaults = _parse_json_defaults(data)
+    speakers = _parse_json_speakers(data)
+    cues = _parse_json_cues(data)
+
+    _check_json_speakers_defined(cues, speakers)
+
+    warnings = _unused_speaker_and_count_warnings(speakers, cues)
+    warnings.extend(_json_cue_warnings(cues))
 
     return VdsScript(
         version=version,

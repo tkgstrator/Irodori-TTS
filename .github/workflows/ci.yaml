@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Ruff needs no project dependencies, so this job stays fast and never
+      # waits on the torch install that the test job needs.
+      - name: ruff check
+        run: uvx ruff@0.16.5 check --output-format=github .
+
+      - name: ruff format
+        run: uvx ruff@0.16.5 format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: install
+        run: uv sync --extra cpu
+
+      - name: pytest
+        run: uv run pytest -q
