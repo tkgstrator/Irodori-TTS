@@ -739,7 +739,7 @@ def _resolve_configs(  # noqa: C901, PLR0912, PLR0915
     )
 
 
-def _setup_wandb_and_tokenizers(  # noqa: C901, PLR0912, PLR0913
+def _setup_wandb_and_tokenizers(  # noqa: C901, PLR0912, PLR0913, PLR0915
     *,
     args,
     distributed,
@@ -791,6 +791,10 @@ def _setup_wandb_and_tokenizers(  # noqa: C901, PLR0912, PLR0913
             f"run={wandb_client.name} base_url={wandb_client.base_url or '<default>'}"
         )
 
+    # The distributed path assigns these through two complementary branches, so
+    # bind them up front to keep the definite-assignment check simple.
+    tokenizer = None
+    caption_tokenizer = None
     if distributed:
         local_files_only = not is_main_process
         if is_main_process:
@@ -1442,6 +1446,10 @@ def _build_model(  # noqa: C901, PLR0912, PLR0913, PLR0915
     progress: TrainProgress | None = None
     resumed_es_best_val: float | None = None
     resumed_es_no_improve: int | None = None
+    # Only the resume path fills these in, but they are returned either way.
+    ckpt: dict | None = None
+    dataloader_state: dict | None = None
+    runtime_state: dict | None = None
     if args.resume is not None:
         ckpt = _load_checkpoint_payload(resume_path, map_location="cpu")
         if not train_config_uses_lora(train_cfg):
