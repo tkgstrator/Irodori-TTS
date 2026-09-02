@@ -14,7 +14,7 @@ import pytest
 import torch
 
 from irodori_tts.config import ModelConfig, TrainConfig
-from train import (
+from irodori_tts.training.checkpointing import (
     _best_checkpoint_path,
     _final_checkpoint_path,
     _periodic_checkpoint_path,

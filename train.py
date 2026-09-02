@@ -5,13 +5,10 @@ import argparse
 import json
 import os
 import random
-import re
-import shutil
 import sys
 import uuid as _uuid
 from contextlib import nullcontext
 from dataclasses import asdict, replace
-from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
@@ -25,7 +22,6 @@ from torchdata.stateful_dataloader.sampler import StatefulDistributedSampler
 
 from irodori_tts.config import (
     ModelConfig,
-    SamplePromptConfig,
     TrainConfig,
     dump_configs,
     load_config_yaml,
@@ -35,10 +31,8 @@ from irodori_tts.config import (
 from irodori_tts.dataset import LatentTextDataset, TTSCollator, _ManifestIndex
 from irodori_tts.duration import set_duration_has_speaker_feature
 from irodori_tts.lora import (
-    LORA_METADATA_NAME,
     LORA_TARGET_PRESETS,
     LORA_TRAIN_CONFIG_FIELDS,
-    LORA_TRAINER_STATE_NAME,
     apply_lora,
     count_parameters,
     is_lora_adapter_dir,
@@ -67,23 +61,31 @@ from irodori_tts.rf import (
 )
 from irodori_tts.speaker_inversion import (
     SPEAKER_EMBEDDING_KEY,
-    SPEAKER_INVERSION_SAFETENSORS_SUFFIX,
     load_speaker_inversion_payload,
-    save_speaker_inversion_checkpoint,
 )
 from irodori_tts.tokenizer import PretrainedTextTokenizer
+from irodori_tts.training.checkpointing import (
+    RUNTIME_STATE_KEY,
+    _collect_dataloader_state,
+    _final_checkpoint_path,
+    _load_checkpoint_payload,
+    _periodic_checkpoint_path,
+    _runtime_state_for_checkpoint,
+    _select_dataloader_state_for_rank,
+    enforce_periodic_checkpoint_limit,
+    list_best_val_loss_checkpoints,
+    maybe_save_best_val_loss_checkpoint,
+    prune_best_val_loss_checkpoints,
+    save_checkpoint,
+)
+from irodori_tts.training.speaker_prompts import (
+    _autopick_prompts_from_manifest,
+    _build_prompts_from_speaker_config,
+    _resolve_speaker_id,
+)
 
 WANDB_MODES = {"online", "offline", "disabled"}
 TRAIN_MODES = {"rf", "duration_only"}
-CHECKPOINT_STEP_RE = re.compile(
-    rf"^checkpoint_(\d+)(?:\.pt|{re.escape(SPEAKER_INVERSION_SAFETENSORS_SUFFIX)})?$"
-)
-CHECKPOINT_BEST_VAL_LOSS_RE = re.compile(
-    rf"^checkpoint_best_val_loss_(\d+)_(-?\d+(?:\.\d+)?)"
-    rf"(?:\.pt|{re.escape(SPEAKER_INVERSION_SAFETENSORS_SUFFIX)})?$"
-)
-DATALOADER_STATE_KEY = "dataloader_state"
-RUNTIME_STATE_KEY = "runtime_state"
 # DACVAE latent frame rate (Hz). Used for seconds<->frames conversion for
 # reference audio concat length ranges.
 _CODEC_FRAMES_PER_SECOND = 25
@@ -174,525 +176,8 @@ def compute_rf_loss(
     raise ValueError(f"Unsupported rf_loss_mode={mode!r}. Expected 'echo' or 'utterance_mean'.")
 
 
-def _load_speaker_yaml(manifest_path: str | Path | None) -> dict | None:
-    if manifest_path is None:
-        return None
-    cfg_path = Path(manifest_path).parent / "config.yaml"
-    if not cfg_path.is_file():
-        return None
-    try:
-        import yaml
-        with cfg_path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
-
-
-def _resolve_speaker_name(manifest_path: str | Path | None) -> str | None:
-    if manifest_path is None:
-        return None
-    speaker_dir = Path(manifest_path).parent
-    speaker_id = speaker_dir.name or None
-    data = _load_speaker_yaml(manifest_path)
-    if data is None:
-        return speaker_id
-    speaker = (data.get("speaker") or {}) if isinstance(data, dict) else {}
-    return speaker.get("label") or speaker.get("name") or speaker.get("id") or speaker_id
-
-
-def _resolve_speaker_id(manifest_path: str | Path | None) -> str | None:
-    if manifest_path is None:
-        return None
-    speaker_dir = Path(manifest_path).parent
-    data = _load_speaker_yaml(manifest_path)
-    if isinstance(data, dict):
-        speaker = (data.get("speaker") or {}) if isinstance(data, dict) else {}
-        value = speaker.get("id")
-        if value is not None:
-            text = str(value).strip()
-            if text:
-                return text
-
-    raw = speaker_dir.name.strip()
-    if not raw:
-        return None
-    return re.sub(r"_v\d+$", "", raw, flags=re.IGNORECASE).lower()
-
-
-def _resolve_base_model_name(base_model: str | None) -> str | None:
-    if base_model is None:
-        return None
-    text = str(base_model).strip()
-    if not text:
-        return None
-
-    lowered = text.lower()
-    if "irodori-tts" not in lowered:
-        return None
-
-    match = re.search(r"v\d+", lowered)
-    if match is None:
-        return None
-
-    suffix = "-VoiceDesign" if "voicedesign" in lowered else ""
-    return f"Irodori-TTS/{match.group(0)}{suffix}"
-
-
-def _build_prompts_from_speaker_config(
-    manifest_path: str | Path | None,
-) -> list[SamplePromptConfig]:
-    data = _load_speaker_yaml(manifest_path)
-    if data is None:
-        return []
-    texts = data.get("sample_texts") or []
-    if not isinstance(texts, list):
-        return []
-    prompts: list[SamplePromptConfig] = []
-    for i, t in enumerate(texts):
-        if not isinstance(t, str) or not t.strip():
-            continue
-        prompts.append(SamplePromptConfig(name=f"sample_{i:02d}", text=t.strip()))
-    return prompts
-
-
-def _autopick_prompts_from_manifest(
-    manifest_path: str | Path | None,
-    *,
-    n: int = 5,
-    min_len: int = 10,
-    max_len: int = 60,
-) -> list[SamplePromptConfig]:
-    """Pick `n` length-balanced texts from the training manifest.
-
-    Used as a fallback when data/<speaker>/config.yaml is missing or has no
-    sample_texts. Filters to texts in [min_len, max_len] characters, sorts by
-    length, and picks evenly-spaced quantiles so the sample set spans short /
-    medium / long utterances. Deterministic for a given manifest.
-    """
-    if manifest_path is None:
-        return []
-    try:
-        with Path(manifest_path).open(encoding="utf-8") as f:
-            texts: list[str] = []
-            seen: set[str] = set()
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    item = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                t = (item.get("text") or "").strip()
-                if t and t not in seen:
-                    seen.add(t)
-                    texts.append(t)
-    except OSError:
-        return []
-    candidates = [t for t in texts if min_len <= len(t) <= max_len]
-    if not candidates:
-        candidates = sorted(set(texts), key=len)
-    if not candidates:
-        return []
-    candidates.sort(key=len)
-    m = len(candidates)
-    if m <= n:
-        picks = candidates
-    else:
-        quantiles = [int(round((i + 0.5) / n * m)) - 1 for i in range(n)]
-        picks = [candidates[max(0, min(m - 1, q))] for q in quantiles]
-    return [SamplePromptConfig(name=f"sample_{i:02d}", text=t) for i, t in enumerate(picks)]
-
-
-def _build_lora_safetensors_metadata(
-    *,
-    run_uuid: str | None,
-    run_name: str | None,
-    speaker_id: str | None,
-    base_model: str | None,
-    step: int,
-    optim_steps_per_epoch: int | None,
-    train_cfg: TrainConfig,
-    val_loss: float | None,
-) -> dict[str, str]:
-    meta: dict[str, str] = {}
-    if run_uuid:
-        meta["uuid"] = str(run_uuid)
-    if base_model:
-        meta["base_model"] = str(base_model)
-    resolved_model_name = _resolve_base_model_name(base_model)
-    if resolved_model_name:
-        meta["model_name"] = resolved_model_name
-    elif run_name:
-        meta["model_name"] = str(run_name)
-    if run_name:
-        meta["run_name"] = str(run_name)
-    if speaker_id:
-        meta["speaker"] = str(speaker_id)
-    meta["step"] = str(int(step))
-    if optim_steps_per_epoch and optim_steps_per_epoch > 0:
-        meta["epoch"] = str(int(step) // int(optim_steps_per_epoch))
-    if val_loss is not None:
-        meta["val_loss"] = f"{float(val_loss):.6f}"
-    meta["created_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    meta["lora_r"] = str(int(train_cfg.lora_r))
-    meta["lora_alpha"] = str(int(train_cfg.lora_alpha))
-    meta["lora_dropout"] = f"{float(train_cfg.lora_dropout):.6f}"
-    meta["lora_target_modules"] = str(train_cfg.lora_target_modules)
-    return meta
-
-
-def _inject_safetensors_metadata(adapter_path: Path, extra_metadata: dict[str, str]) -> None:
-    """Re-save adapter_model.safetensors with merged __metadata__."""
-    try:
-        from safetensors import safe_open
-        from safetensors.torch import save_file
-    except ImportError:
-        return
-    if not adapter_path.is_file():
-        return
-    tensors: dict[str, torch.Tensor] = {}
-    existing_meta: dict[str, str] = {}
-    with safe_open(str(adapter_path), framework="pt", device="cpu") as f:
-        existing_meta = dict(f.metadata() or {})
-        for key in f.keys():
-            tensors[key] = f.get_tensor(key)
-    merged = {**existing_meta, **{k: v for k, v in extra_metadata.items() if v is not None}}
-    save_file(tensors, str(adapter_path), metadata=merged)
-
-
-def save_checkpoint(
-    path: str | Path,
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler,
-    step: int,
-    model_cfg: ModelConfig,
-    train_cfg: TrainConfig,
-    *,
-    base_init: dict | None = None,
-    es_best_val: float | None = None,
-    es_no_improve: int | None = None,
-    manifest_size: int | None = None,
-    run_uuid: str | None = None,
-    run_name: str | None = None,
-    speaker_name: str | None = None,
-    optim_steps_per_epoch: int | None = None,
-    val_loss: float | None = None,
-    dataloader_state: dict | None = None,
-    runtime_state: dict | None = None,
-) -> None:
-    path = Path(path)
-    if train_cfg.speaker_inversion_enabled:
-        save_speaker_inversion_checkpoint(path, model=model)
-        return
-
-    es_state = {
-        "es_best_val": float(es_best_val) if es_best_val is not None else None,
-        "es_no_improve": int(es_no_improve) if es_no_improve is not None else None,
-    }
-    manifest_meta = {"manifest_size": int(manifest_size) if manifest_size is not None else None}
-    if train_config_uses_lora(train_cfg):
-        if path.exists():
-            _safe_unlink(path)
-        path.mkdir(parents=True, exist_ok=True)
-        if not hasattr(model, "save_pretrained"):
-            raise RuntimeError(
-                "LoRA checkpoint saving requires a PEFT model with save_pretrained()."
-            )
-        model.save_pretrained(path)
-        adapter_safetensors = path / "adapter_model.safetensors"
-        if adapter_safetensors.is_file():
-            base_model_str: str | None = None
-            if base_init is not None:
-                base_model_str = base_init.get("checkpoint_path")
-            extra_meta = _build_lora_safetensors_metadata(
-                run_uuid=run_uuid,
-                run_name=run_name,
-                speaker_id=speaker_name,
-                base_model=base_model_str,
-                step=step,
-                optim_steps_per_epoch=optim_steps_per_epoch,
-                train_cfg=train_cfg,
-                val_loss=val_loss,
-            )
-            _inject_safetensors_metadata(adapter_safetensors, extra_meta)
-        dump_configs(path / "config.json", model_cfg, train_cfg)
-        (path / LORA_METADATA_NAME).write_text(
-            json.dumps({"base_init": base_init}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        if manifest_size is not None:
-            (path / "manifest_size.txt").write_text(f"{int(manifest_size)}\n", encoding="utf-8")
-        torch.save(
-            {
-                "step": step,
-                "optimizer": optimizer.state_dict(),
-                "scheduler": None if scheduler is None else scheduler.state_dict(),
-                "model_config": asdict(model_cfg),
-                "train_config": asdict(train_cfg),
-                "base_init": base_init,
-                **es_state,
-                **manifest_meta,
-                DATALOADER_STATE_KEY: dataloader_state,
-                RUNTIME_STATE_KEY: runtime_state,
-            },
-            path / LORA_TRAINER_STATE_NAME,
-        )
-        return
-
-    text_encoder_config = None
-    pretrained_backbone = getattr(model, "pretrained_text_backbone", None)
-    if pretrained_backbone is not None:
-        raw_config = getattr(pretrained_backbone, "config_dict", None)
-        if isinstance(raw_config, dict):
-            text_encoder_config = dict(raw_config)
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "step": step,
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scheduler": None if scheduler is None else scheduler.state_dict(),
-            "model_config": asdict(model_cfg),
-            "train_config": asdict(train_cfg),
-            **es_state,
-            **manifest_meta,
-            "text_encoder_config": text_encoder_config,
-            DATALOADER_STATE_KEY: dataloader_state,
-            RUNTIME_STATE_KEY: runtime_state,
-        },
-        path,
-    )
-
-
-def _runtime_state_for_checkpoint(*, epoch: int, epoch_step: int) -> dict[str, int]:
-    return {
-        "epoch": int(epoch),
-        "sampler_epoch": max(0, int(epoch) - 1),
-        "epoch_step": int(epoch_step),
-    }
-
-
-def _collect_dataloader_state(
-    loader: StatefulDataLoader,
-    *,
-    distributed: bool,
-    rank: int,
-    world_size: int,
-) -> dict:
-    local_state = loader.state_dict()
-    if not distributed:
-        return {
-            "version": 1,
-            "world_size": 1,
-            "rank_states": [local_state],
-        }
-
-    rank_states: list[dict | None] = [None for _ in range(world_size)]
-    dist.all_gather_object(rank_states, local_state)
-    return {
-        "version": 1,
-        "world_size": int(world_size),
-        "rank_states": rank_states,
-        "saved_by_rank": int(rank),
-    }
-
-
-def _select_dataloader_state_for_rank(
-    payload: dict,
-    *,
-    distributed: bool,
-    rank: int,
-    world_size: int,
-) -> dict | None:
-    state = payload.get(DATALOADER_STATE_KEY)
-    if state is None:
-        return None
-    if not isinstance(state, dict):
-        raise ValueError("Checkpoint dataloader_state must be a dictionary when present.")
-    rank_states = state.get("rank_states")
-    if not isinstance(rank_states, list):
-        raise ValueError("Checkpoint dataloader_state.rank_states must be a list.")
-    saved_world_size = int(state.get("world_size", len(rank_states)))
-    expected_world_size = int(world_size) if distributed else 1
-    if saved_world_size != expected_world_size or len(rank_states) != expected_world_size:
-        raise ValueError(
-            "Cannot restore dataloader state with a different world_size: "
-            f"checkpoint={saved_world_size} current={expected_world_size}"
-        )
-    state_rank = int(rank) if distributed else 0
-    rank_state = rank_states[state_rank]
-    if rank_state is not None and not isinstance(rank_state, dict):
-        raise ValueError(f"Checkpoint dataloader state for rank {state_rank} must be a dictionary.")
-    return _move_state_tensors_to_cpu(rank_state)
-
-
-def _move_state_tensors_to_cpu(value):
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu()
-    if isinstance(value, dict):
-        return {key: _move_state_tensors_to_cpu(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_move_state_tensors_to_cpu(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_move_state_tensors_to_cpu(item) for item in value)
-    return value
-
-
-def _safe_unlink(path: Path) -> None:
-    try:
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-    except FileNotFoundError:
-        return
-
-
-def list_periodic_checkpoints(output_dir: Path) -> list[tuple[int, Path]]:
-    checkpoints: list[tuple[int, Path]] = []
-    for path in output_dir.glob("checkpoint_*"):
-        match = CHECKPOINT_STEP_RE.match(path.name)
-        if match is None:
-            continue
-        checkpoints.append((int(match.group(1)), path))
-    checkpoints.sort(key=lambda item: item[0], reverse=True)
-    return checkpoints
-
-
-def enforce_periodic_checkpoint_limit(output_dir: Path, keep_count: int) -> None:
-    if keep_count <= 0:
-        return
-    checkpoints = list_periodic_checkpoints(output_dir)
-    for _, stale_path in checkpoints[keep_count:]:
-        _safe_unlink(stale_path)
-
-
-def list_best_val_loss_checkpoints(output_dir: Path) -> list[tuple[float, int, Path]]:
-    checkpoints: list[tuple[float, int, Path]] = []
-    for path in output_dir.glob("checkpoint_best_val_loss_*"):
-        match = CHECKPOINT_BEST_VAL_LOSS_RE.match(path.name)
-        if match is None:
-            continue
-        step = int(match.group(1))
-        score = float(match.group(2))
-        checkpoints.append((score, step, path))
-    checkpoints.sort(key=lambda item: (item[0], item[1]))
-    return checkpoints
-
-
-def prune_best_val_loss_checkpoints(
-    checkpoints: list[tuple[float, int, Path]],
-    keep_best_n: int,
-) -> list[tuple[float, int, Path]]:
-    if keep_best_n <= 0:
-        return checkpoints
-    checkpoints = sorted(checkpoints, key=lambda item: (item[0], item[1]))
-    while len(checkpoints) > keep_best_n:
-        _, _, stale_path = checkpoints.pop()
-        _safe_unlink(stale_path)
-    return checkpoints
-
-
-def maybe_save_best_val_loss_checkpoint(
-    *,
-    output_dir: Path,
-    checkpoints: list[tuple[float, int, Path]],
-    keep_best_n: int,
-    val_loss: float,
-    step: int,
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler,
-    model_cfg: ModelConfig,
-    train_cfg: TrainConfig,
-    base_init: dict | None,
-    es_best_val: float | None = None,
-    es_no_improve: int | None = None,
-    manifest_size: int | None = None,
-    run_uuid: str | None = None,
-    run_name: str | None = None,
-    speaker_name: str | None = None,
-    optim_steps_per_epoch: int | None = None,
-    dataloader_state: dict | None = None,
-    runtime_state: dict | None = None,
-) -> tuple[list[tuple[float, int, Path]], Path | None]:
-    if keep_best_n <= 0:
-        return checkpoints, None
-
-    checkpoints = sorted(checkpoints, key=lambda item: (item[0], item[1]))
-    if len(checkpoints) >= keep_best_n:
-        worst_score = checkpoints[-1][0]
-        if val_loss >= worst_score:
-            return checkpoints, None
-
-    kept: list[tuple[float, int, Path]] = []
-    for score, saved_step, path in checkpoints:
-        if saved_step == step:
-            _safe_unlink(path)
-            continue
-        kept.append((score, saved_step, path))
-    checkpoints = kept
-
-    path = _best_checkpoint_path(output_dir, step=step, val_loss=val_loss, train_cfg=train_cfg)
-    save_checkpoint(
-        path=path,
-        model=model,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        step=step,
-        model_cfg=model_cfg,
-        train_cfg=train_cfg,
-        base_init=base_init,
-        es_best_val=es_best_val,
-        es_no_improve=es_no_improve,
-        manifest_size=manifest_size,
-        run_uuid=run_uuid,
-        run_name=run_name,
-        speaker_name=speaker_name,
-        optim_steps_per_epoch=optim_steps_per_epoch,
-        val_loss=float(val_loss),
-        dataloader_state=dataloader_state,
-        runtime_state=runtime_state,
-    )
-    checkpoints.append((float(val_loss), int(step), path))
-    checkpoints = prune_best_val_loss_checkpoints(checkpoints, keep_best_n)
-    return checkpoints, path
-
-
 def cli_provided(argv: list[str], flag: str) -> bool:
     return any(x == flag or x.startswith(flag + "=") for x in argv)
-
-
-def _periodic_checkpoint_path(output_dir: Path, step: int, train_cfg: TrainConfig) -> Path:
-    if train_cfg.speaker_inversion_enabled:
-        return output_dir / f"checkpoint_{step:07d}{SPEAKER_INVERSION_SAFETENSORS_SUFFIX}"
-    if train_config_uses_lora(train_cfg):
-        return output_dir / f"checkpoint_{step:07d}"
-    return output_dir / f"checkpoint_{step:07d}.pt"
-
-
-def _best_checkpoint_path(
-    output_dir: Path, *, step: int, val_loss: float, train_cfg: TrainConfig
-) -> Path:
-    if train_cfg.speaker_inversion_enabled:
-        return (
-            output_dir / f"checkpoint_best_val_loss_{step:07d}_{val_loss:.6f}"
-            f"{SPEAKER_INVERSION_SAFETENSORS_SUFFIX}"
-        )
-    if train_config_uses_lora(train_cfg):
-        return output_dir / f"checkpoint_best_val_loss_{step:07d}_{val_loss:.6f}"
-    return output_dir / f"checkpoint_best_val_loss_{step:07d}_{val_loss:.6f}.pt"
-
-
-def _final_checkpoint_path(output_dir: Path, train_cfg: TrainConfig) -> Path:
-    if train_cfg.speaker_inversion_enabled:
-        return output_dir / f"checkpoint_final{SPEAKER_INVERSION_SAFETENSORS_SUFFIX}"
-    if train_config_uses_lora(train_cfg):
-        return output_dir / "checkpoint_final"
-    return output_dir / "checkpoint_final.pt"
 
 
 def build_condition_tokenizer(
@@ -1434,18 +919,6 @@ def validate_checkpoint_upgrade_partial_load(
             "Partial init from checkpoint left unexpected parameters missing: "
             f"{checkpoint_path} missing={unexpected_missing[:8]}"
         )
-
-
-def _load_checkpoint_payload(path: str | Path, *, map_location) -> dict:
-    checkpoint_path = Path(path)
-    if checkpoint_path.is_dir():
-        state_path = checkpoint_path / LORA_TRAINER_STATE_NAME
-        payload = torch.load(state_path, map_location=map_location, weights_only=True)
-    else:
-        payload = torch.load(checkpoint_path, map_location=map_location, weights_only=True)
-    if not isinstance(payload, dict):
-        raise ValueError(f"Checkpoint payload must be a dictionary, got {type(payload)!r}.")
-    return payload
 
 
 def _normalize_checkpoint_path(path: str | Path) -> Path:
