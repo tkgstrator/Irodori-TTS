@@ -24,8 +24,10 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,7 +35,7 @@ from huggingface_hub import HfApi
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rebuild_speaker_dataset import _process_row, _RowPaths
+from rebuild_speaker_dataset import _process_row
 
 
 @dataclass
@@ -88,11 +90,14 @@ def _list_shards(repo_id: str, pattern: str, token: str | None) -> list[str]:
 
 def _drain_shard(
     table,
-    names: list[str],
     wanted: dict[str, str],
     speakers: dict[str, _Speaker],
     args: argparse.Namespace,
+    pool: ThreadPoolExecutor,
 ) -> None:
+    col = args.speaker_column or ("speaker" if "speaker" in table.column_names else "character")
+    names: list[str] = table.column(col).to_pylist()
+    jobs: list[tuple[int, _Speaker]] = []
     for row_idx, raw_name in enumerate(names):
         sid = wanted.get((raw_name or "").strip())
         if sid is None:
@@ -100,14 +105,33 @@ def _drain_shard(
         spk = speakers.get(sid)
         if spk is None:
             spk = speakers[sid] = _open_speaker(sid, args.output_root)
-        status, record = _process_row(
-            table,
-            row_idx,
-            args,
-            _RowPaths(tmp_dir=spk.tmp_dir, wav_dir=spk.wav_dir),
-            spk.written,
-        )
+        jobs.append((row_idx, spk))
+    if not jobs:
+        return
+
+    def _run(job: tuple[int, _Speaker]) -> tuple[str, dict | None]:
+        row_idx, spk = job
+        scratch = spk.tmp_dir / f"r{row_idx:08d}"
+        scratch.mkdir(parents=True, exist_ok=True)
+        try:
+            return _process_row(
+                table,
+                row_idx,
+                args,
+                scratch,
+                spk.wav_dir / f".stage_{row_idx:08d}.wav",
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    # ffmpeg is a subprocess, so threads overlap cleanly. map yields in input
+    # order, which keeps the numbering and manifest order identical to a
+    # serial run however the workers happen to interleave.
+    for (_, spk), (status, record) in zip(jobs, pool.map(_run, jobs), strict=True):
         if status == "kept" and record is not None:
+            final = spk.wav_dir / f"{spk.written:06d}.wav"
+            Path(record["audio"]).replace(final)
+            record["audio"] = str(final)
             spk.handle.write(json.dumps(record, ensure_ascii=False) + "\n")
             spk.written += 1
         else:
@@ -141,6 +165,12 @@ def main() -> None:
     ap.add_argument("--silence-db", type=float, default=-40.0)
     ap.add_argument("--normalize-lufs", type=float, default=-20.0)
     ap.add_argument("--token", default=None)
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=min(32, (os.cpu_count() or 1)),
+        help="Concurrent ffmpeg conversions.",
+    )
     args = ap.parse_args()
 
     wanted = _read_speaker_map(args.speaker_map)
@@ -152,16 +182,17 @@ def main() -> None:
     shards = _list_shards(args.repo_id, args.data_files, args.token)
     print(f"matched {len(shards)} shards")
 
+    if args.workers < 1:
+        sys.exit("--workers must be >= 1")
+    print(f"{args.workers} conversion workers")
+
     args.output_root.mkdir(parents=True, exist_ok=True)
     speakers: dict[str, _Speaker] = {}
     try:
-        for shard in tqdm(shards, desc="shards"):
-            local = hf_hub_download(args.repo_id, shard, repo_type="dataset", token=args.token)
-            table = pq.read_table(local)
-            col = args.speaker_column or (
-                "speaker" if "speaker" in table.column_names else "character"
-            )
-            _drain_shard(table, table.column(col).to_pylist(), wanted, speakers, args)
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            for shard in tqdm(shards, desc="shards"):
+                local = hf_hub_download(args.repo_id, shard, repo_type="dataset", token=args.token)
+                _drain_shard(pq.read_table(local), wanted, speakers, args, pool)
     finally:
         _close_all(speakers)
 

@@ -39,7 +39,6 @@ import struct
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
@@ -106,19 +105,18 @@ def _trim_and_normalize(src: Path, dst: Path, silence_db: float, lufs: float) ->
         return None
 
 
-@dataclass
-class _RowPaths:
-    tmp_dir: Path
-    wav_dir: Path
-
-
 def _process_row(
     table,
     row_idx: int,
     args: argparse.Namespace,
-    paths: _RowPaths,
-    written: int,
+    tmp_dir: Path,
+    dest: Path,
 ) -> tuple[str, dict | None]:
+    """Decode, trim and normalise one row into `dest`.
+
+    `tmp_dir` must be private to the caller: concurrent callers sharing one
+    would overwrite each other's scratch files.
+    """
     audio_col = table.column("audio")[row_idx].as_py()
     transcription = table.column("transcription")[row_idx].as_py()
 
@@ -127,14 +125,14 @@ def _process_row(
     if not audio_col or not audio_col.get("bytes"):
         return "no_audio", None
 
-    raw_path = paths.tmp_dir / "raw.wav"
+    raw_path = tmp_dir / "raw.wav"
     audio_bytes = audio_col["bytes"]
     if audio_bytes[:4] == b"RIFF":
         raw_path.write_bytes(audio_bytes)
     else:
         _write_wav(raw_path, audio_bytes, sample_rate=44100)
 
-    trimmed_path = paths.tmp_dir / "trimmed.wav"
+    trimmed_path = tmp_dir / "trimmed.wav"
     try:
         dur = _trim_and_normalize(
             raw_path,
@@ -151,10 +149,9 @@ def _process_row(
     if dur > args.max_seconds:
         return "long", None
 
-    final_path = paths.wav_dir / f"{written:06d}.wav"
-    trimmed_path.replace(final_path)
+    trimmed_path.replace(dest)
     record = {
-        "audio": str(final_path),
+        "audio": str(dest),
         "text": transcription.strip(),
         "duration": round(dur, 3),
     }
@@ -204,7 +201,7 @@ def main() -> None:
         tempfile.TemporaryDirectory(dir=tmp_root) as tmp_str,
         metadata_path.open("w", encoding="utf-8") as meta_f,
     ):
-        paths = _RowPaths(tmp_dir=Path(tmp_str), wav_dir=wav_dir)
+        tmp_dir = Path(tmp_str)
         for shard_path in tqdm(parquet_files, desc="shards"):
             local_path = hf_hub_download(
                 args.repo_id,
@@ -217,7 +214,9 @@ def main() -> None:
             for row_idx, spk in enumerate(speakers):
                 if spk != args.speaker:
                     continue
-                status, record = _process_row(table, row_idx, args, paths, written)
+                status, record = _process_row(
+                    table, row_idx, args, tmp_dir, wav_dir / f"{written:06d}.wav"
+                )
                 if status == "kept":
                     meta_f.write(json.dumps(record, ensure_ascii=False) + "\n")
                     written += 1
