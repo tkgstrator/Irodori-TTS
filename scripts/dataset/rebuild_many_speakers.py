@@ -121,23 +121,21 @@ def _drain_shard(
 
     def _run(job: tuple[int, _Speaker]) -> tuple[str, dict | None]:
         row_idx, spk = job
+        # Everything before the final rename stays inside this part's own
+        # scratch tree. wavs/ is shared with the other parts of a shard split,
+        # so nothing may land there under a name they could also pick.
         scratch = spk.tmp_dir / f"r{row_idx:08d}"
         scratch.mkdir(parents=True, exist_ok=True)
         try:
-            return _process_row(
-                table,
-                row_idx,
-                args,
-                scratch,
-                spk.wav_dir / f".stage_{row_idx:08d}.wav",
-            )
-        finally:
+            return _process_row(table, row_idx, args, scratch, scratch / "out.wav")
+        except BaseException:
             shutil.rmtree(scratch, ignore_errors=True)
+            raise
 
     # ffmpeg is a subprocess, so threads overlap cleanly. map yields in input
     # order, which keeps the numbering and manifest order identical to a
     # serial run however the workers happen to interleave.
-    for (_, spk), (status, record) in zip(jobs, pool.map(_run, jobs), strict=True):
+    for (row_idx, spk), (status, record) in zip(jobs, pool.map(_run, jobs), strict=True):
         if status == "kept" and record is not None:
             final = spk.wav_dir / f"{spk.prefix}{spk.written:06d}.wav"
             Path(record["audio"]).replace(final)
@@ -146,6 +144,7 @@ def _drain_shard(
             spk.written += 1
         else:
             spk.skipped += 1
+        shutil.rmtree(spk.tmp_dir / f"r{row_idx:08d}", ignore_errors=True)
 
 
 def _close_all(speakers: dict[str, _Speaker], part: int | None) -> None:
