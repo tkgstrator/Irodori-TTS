@@ -45,24 +45,34 @@ class _Speaker:
     wav_dir: Path
     tmp_dir: Path
     handle: object
+    prefix: str = ""
     written: int = 0
     skipped: int = 0
 
 
-def _open_speaker(sid: str, root: Path) -> _Speaker:
+def _open_speaker(sid: str, root: Path, part: int | None) -> _Speaker:
+    """Open one speaker for writing.
+
+    `part` is the shard-offset of this process when several are splitting one
+    corpus across machines. They share the speaker directory, so a part must
+    not wipe it, and its files carry the part number to stay disjoint. Each
+    part writes its own manifest; concatenating them yields metadata.jsonl.
+    """
     out_dir = root / sid
-    if out_dir.exists():
+    if part is None and out_dir.exists():
         shutil.rmtree(out_dir, ignore_errors=True)
     wav_dir = out_dir / "wavs"
-    tmp_dir = out_dir / "_tmp"
+    tmp_dir = out_dir / "_tmp" if part is None else out_dir / f"_tmp{part:02d}"
     wav_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir.mkdir(parents=True, exist_ok=True)
+    manifest = "metadata.jsonl" if part is None else f"metadata.part{part:02d}.jsonl"
     return _Speaker(
         sid=sid,
         out_dir=out_dir,
         wav_dir=wav_dir,
         tmp_dir=tmp_dir,
-        handle=(out_dir / "metadata.jsonl").open("w", encoding="utf-8"),
+        handle=(out_dir / manifest).open("w", encoding="utf-8"),
+        prefix="" if part is None else f"p{part:02d}_",
     )
 
 
@@ -104,7 +114,7 @@ def _drain_shard(
             continue
         spk = speakers.get(sid)
         if spk is None:
-            spk = speakers[sid] = _open_speaker(sid, args.output_root)
+            spk = speakers[sid] = _open_speaker(sid, args.output_root, args.part)
         jobs.append((row_idx, spk))
     if not jobs:
         return
@@ -129,7 +139,7 @@ def _drain_shard(
     # serial run however the workers happen to interleave.
     for (_, spk), (status, record) in zip(jobs, pool.map(_run, jobs), strict=True):
         if status == "kept" and record is not None:
-            final = spk.wav_dir / f"{spk.written:06d}.wav"
+            final = spk.wav_dir / f"{spk.prefix}{spk.written:06d}.wav"
             Path(record["audio"]).replace(final)
             record["audio"] = str(final)
             spk.handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -138,14 +148,19 @@ def _drain_shard(
             spk.skipped += 1
 
 
-def _close_all(speakers: dict[str, _Speaker]) -> None:
+def _close_all(speakers: dict[str, _Speaker], part: int | None) -> None:
     for spk in speakers.values():
         spk.handle.close()
         shutil.rmtree(spk.tmp_dir, ignore_errors=True)
         # A speaker that produced nothing would otherwise leave an empty
         # metadata.jsonl behind, which later stages read as "already done".
+        # Under a shard split the other parts own the same directory, so drop
+        # only this part's manifest and leave their work alone.
         if spk.written == 0:
-            shutil.rmtree(spk.out_dir, ignore_errors=True)
+            if part is None:
+                shutil.rmtree(spk.out_dir, ignore_errors=True)
+            else:
+                (spk.out_dir / f"metadata.part{part:02d}.jsonl").unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -171,6 +186,18 @@ def main() -> None:
         default=min(32, (os.cpu_count() or 1)),
         help="Concurrent ffmpeg conversions.",
     )
+    ap.add_argument(
+        "--shard-stride",
+        type=int,
+        default=1,
+        help="Split the shards across this many machines (1 disables splitting).",
+    )
+    ap.add_argument(
+        "--shard-offset",
+        type=int,
+        default=0,
+        help="Which slice of the split this process takes, 0..stride-1.",
+    )
     args = ap.parse_args()
 
     wanted = _read_speaker_map(args.speaker_map)
@@ -184,6 +211,14 @@ def main() -> None:
 
     if args.workers < 1:
         sys.exit("--workers must be >= 1")
+    if args.shard_stride < 1:
+        sys.exit("--shard-stride must be >= 1")
+    if not 0 <= args.shard_offset < args.shard_stride:
+        sys.exit("--shard-offset must be in 0..stride-1")
+    args.part = None if args.shard_stride == 1 else args.shard_offset
+    if args.part is not None:
+        shards = shards[args.shard_offset :: args.shard_stride]
+        print(f"part {args.shard_offset}/{args.shard_stride}: {len(shards)} shards")
     print(f"{args.workers} conversion workers")
 
     args.output_root.mkdir(parents=True, exist_ok=True)
@@ -194,7 +229,7 @@ def main() -> None:
                 local = hf_hub_download(args.repo_id, shard, repo_type="dataset", token=args.token)
                 _drain_shard(pq.read_table(local), wanted, speakers, args, pool)
     finally:
-        _close_all(speakers)
+        _close_all(speakers, args.part)
 
     done = {sid: spk for sid, spk in speakers.items() if spk.written > 0}
     print(f"\nextracted {len(done)} / {len(wanted)} speakers")
