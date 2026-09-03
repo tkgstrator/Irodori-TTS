@@ -64,6 +64,12 @@ def _write_wav(path: Path, pcm_bytes: bytes, sample_rate: int = 44100) -> None:
         f.write(pcm_bytes)
 
 
+# A clip is at most a few tens of seconds, so a conversion that has not
+# finished by now is wedged. Without a bound one stuck ffmpeg blocks every
+# other worker, since the caller consumes results in order.
+_FFMPEG_TIMEOUT_SECONDS = 120
+
+
 def _trim_and_normalize(src: Path, dst: Path, silence_db: float, lufs: float) -> float | None:
     af = (
         f"silenceremove=1:0:{silence_db}dB,"
@@ -89,12 +95,14 @@ def _trim_and_normalize(src: Path, dst: Path, silence_db: float, lufs: float) ->
             str(dst),
         ],
         check=True,
+        timeout=_FFMPEG_TIMEOUT_SECONDS,
     )
     r = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(dst)],
         capture_output=True,
         text=True,
         check=True,
+        timeout=_FFMPEG_TIMEOUT_SECONDS,
     )
     out = r.stdout.strip()
     if not out or out == "N/A":
@@ -140,7 +148,7 @@ def _process_row(
             silence_db=args.silence_db,
             lufs=args.normalize_lufs,
         )
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         dur = None
     if dur is None:
         return "err", None
