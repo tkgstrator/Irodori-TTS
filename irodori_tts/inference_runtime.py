@@ -825,13 +825,25 @@ class InferenceRuntime:
             device=codec_device,
         )
 
-        base_state, model_cfg_dict, train_cfg = _load_checkpoint_for_inference(
-            Path(key.checkpoint)
+        base_state, model_cfg_dict, train_cfg, text_encoder_config = (
+            _load_checkpoint_for_inference(Path(key.checkpoint))
         )
-        model_cfg = ModelConfig(**model_cfg_dict)
+        model_cfg = merge_dataclass_overrides(
+            ModelConfig(),
+            model_cfg_dict,
+            section="checkpoint model_config",
+        )
 
-        base_model = TextToLatentRFDiT(model_cfg).to(model_device)
-        base_model.load_state_dict(base_state)
+        base_model = TextToLatentRFDiT(
+            model_cfg,
+            pretrained_backbone_config=text_encoder_config,
+            load_pretrained_backbone_weights=not model_cfg.use_pretrained_text_encoder,
+        )
+        base_model.load_state_dict(
+            base_state,
+            assign=model_cfg.use_pretrained_text_encoder,
+        )
+        base_model = base_model.to(model_device)
         base_model = base_model.to(dtype=model_dtype)
         base_model.eval()
 
