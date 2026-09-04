@@ -73,6 +73,7 @@ class ServerConfig:
     tail_std_threshold: float
     tail_mean_threshold: float
     show_timings: bool
+    lora_slots: int
     speakers: list[SpeakerSpec]
 
 
@@ -198,6 +199,7 @@ def load_config(path: Path) -> ServerConfig:
         tail_std_threshold=float(raw.get("tail_std_threshold", 0.05)),
         tail_mean_threshold=float(raw.get("tail_mean_threshold", 0.1)),
         show_timings=bool(raw.get("show_timings", True)),
+        lora_slots=int(raw.get("lora_slots", 16)),
         speakers=speakers,
     )
 
