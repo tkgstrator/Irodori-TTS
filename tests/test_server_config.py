@@ -87,10 +87,13 @@ def install_fake_runtimes(
     monkeypatch: pytest.MonkeyPatch, *, base_caption: bool
 ) -> dict[str, list[str]]:
     """Replace both runtime loaders with fakes and record the checkpoints they were asked for."""
-    calls: dict[str, list[str]] = {"base": [], "caption": []}
+    calls: dict[str, list[Any]] = {"base": [], "caption": [], "slots": []}
 
-    def from_base_with_adapters(*, key: Any, adapters: Any, default_adapter: Any) -> FakeRuntime:
+    def from_base_with_adapters(
+        *, key: Any, adapters: Any, default_adapter: Any, adapter_slots: int = 0
+    ) -> FakeRuntime:
         del adapters, default_adapter
+        calls["slots"].append(adapter_slots)
         calls["base"].append(key.checkpoint)
         return FakeRuntime(key.checkpoint, use_caption_condition=base_caption)
 
