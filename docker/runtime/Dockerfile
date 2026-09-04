@@ -3,10 +3,11 @@
 # Runtime image for the Irodori-TTS FastAPI server.
 #
 # The entrypoint installs the project into the container's system Python
-# (UV_PROJECT_ENVIRONMENT=/usr) on start — no virtualenv, which the container
-# already makes redundant, and nothing for a bind mount to shadow or for a
-# throwaway `uv run` on the same host to delete mid-serve. Mount the uv cache
-# (/root/.cache/uv) to keep that start fast.
+# on start — no virtualenv, which the container already makes redundant, and
+# nothing for a bind mount to shadow or for a throwaway `uv run` on the same
+# host to delete mid-serve. UV_PROJECT_ENVIRONMENT is /usr/local rather than
+# /usr because uv requires a bin/python in the target environment and Debian
+# ships only python3 there. Mount the uv cache (/root/.cache/uv) for speed.
 #
 # Everything else is supplied by the user via bind mounts:
 #   - /app/config.yaml              (server config YAML)
@@ -27,7 +28,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     HF_HOME=/root/.cache/huggingface \
-    UV_PROJECT_ENVIRONMENT=/usr \
+    UV_PROJECT_ENVIRONMENT=/usr/local \
     TTS_CONFIG=/app/config.yaml \
     TTS_HOST=0.0.0.0 \
     TTS_PORT=8765
