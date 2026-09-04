@@ -3,7 +3,7 @@ services:
     build:
       context: ../..
       dockerfile: docker/train/Dockerfile
-    image: tkgling/irodori-tts-train:latest
+    image: ghcr.io/tkgstrator/irodori-tts-train:latest
     container_name: irodori-tts-train
     env_file:
       # Expected keys in .env:

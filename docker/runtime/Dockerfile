@@ -14,13 +14,13 @@
 #   - /app/models/...               (base checkpoint and LoRA adapters)
 #
 # Build (from repo root):
-#   docker build -f docker/runtime/Dockerfile -t tkgling/irodori-tts .
+#   docker build -f docker/runtime/Dockerfile -t ghcr.io/tkgstrator/irodori-tts .
 # Run:
 #   docker run --gpus all -p 8765:8765 \
 #     -v ./configs/runtime.yaml:/app/config.yaml:ro \
 #     -v tts_models:/app/models \
 #     -v tts_hf_cache:/root/.cache/huggingface \
-#     tkgling/irodori-tts
+#     ghcr.io/tkgstrator/irodori-tts
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \

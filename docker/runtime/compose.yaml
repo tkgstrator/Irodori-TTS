@@ -3,7 +3,7 @@ services:
     build:
       context: ../..
       dockerfile: docker/runtime/Dockerfile
-    image: tkgling/irodori-tts:latest
+    image: ghcr.io/tkgstrator/irodori-tts:latest
     container_name: irodori-tts
     ports:
       - 8765:8765
