@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.7
 # Training image for Irodori-TTS LoRA fine-tuning.
 #
-# Ships system dependencies, the project source, AND the Python environment.
-# The venv is baked at /opt/venv (UV_PROJECT_ENVIRONMENT) so that bind-mounting
-# a repo checkout over /app does not shadow it, and so that no runtime
-# `uv sync` against a shared volume is needed — a fresh `uv run` used to
-# delete and recreate the volume-backed venv out from under running
-# containers. Only the base model checkpoint is fetched at runtime.
+# Ships system dependencies and the project source. The entrypoint installs the
+# project into the container's system Python (UV_PROJECT_ENVIRONMENT=/usr) on
+# start — there is no virtualenv, which the container already makes redundant,
+# and nothing under /app for a repo bind mount to shadow or for a throwaway
+# `uv run` on the same node to delete. Mount the uv cache (/root/.cache/uv) to
+# keep that start fast: the cache is content-addressed and safe to share.
 #
 # Build (from repo root):
 #   docker build -f docker/train/Dockerfile -t irodori-tts-train .
@@ -17,7 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     HF_HOME=/root/.cache/huggingface \
-    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PROJECT_ENVIRONMENT=/usr \
     BASE_MODEL_REPO=Aratako/Irodori-TTS-500M-v3 \
     BASE_CKPT=/app/models/Irodori-TTS-500M-v3/model.safetensors
 
@@ -51,7 +51,5 @@ COPY scripts ./scripts
 COPY docker/train/entrypoint.sh ./entrypoint.sh
 
 RUN chmod +x entrypoint.sh scripts/train/train_multi_speaker.sh scripts/preprocess/batch_preprocess_voice.sh
-
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 
 ENTRYPOINT ["./entrypoint.sh"]

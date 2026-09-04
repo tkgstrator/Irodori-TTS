@@ -11,6 +11,7 @@ services:
       - ../../configs/runtime.yaml:/app/config.yaml:ro
       - ../../models:/app/models:ro
       - hf_cache:/root/.cache/huggingface
+      - uv_cache:/root/.cache/uv
     environment:
       TTS_HOST: 0.0.0.0
       TTS_PORT: 8765
@@ -32,3 +33,4 @@ services:
 
 volumes:
   hf_cache:
+  uv_cache:

@@ -2,8 +2,11 @@
 #
 # Runtime image for the Irodori-TTS FastAPI server.
 #
-# The Python environment is baked at /opt/venv (UV_PROJECT_ENVIRONMENT) so a
-# bind mount over /app cannot shadow it and no `uv sync` runs at startup.
+# The entrypoint installs the project into the container's system Python
+# (UV_PROJECT_ENVIRONMENT=/usr) on start — no virtualenv, which the container
+# already makes redundant, and nothing for a bind mount to shadow or for a
+# throwaway `uv run` on the same host to delete mid-serve. Mount the uv cache
+# (/root/.cache/uv) to keep that start fast.
 #
 # Everything else is supplied by the user via bind mounts:
 #   - /app/config.yaml              (server config YAML)
@@ -24,7 +27,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     HF_HOME=/root/.cache/huggingface \
-    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PROJECT_ENVIRONMENT=/usr \
     TTS_CONFIG=/app/config.yaml \
     TTS_HOST=0.0.0.0 \
     TTS_PORT=8765
@@ -56,8 +59,6 @@ COPY irodori_tts ./irodori_tts
 COPY server.py infer.py ./
 COPY docker/runtime/entrypoint.sh ./entrypoint.sh
 RUN chmod +x entrypoint.sh
-
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 
 EXPOSE 8765
 

@@ -76,11 +76,11 @@ log() { printf '[entrypoint] %s\n' "$*"; }
 : "${BASE_CKPT:=/app/models/Irodori-TTS-500M-v3/model.safetensors}"
 
 # -----------------------------------------------------------------------------
-# 0. Ensure Python venv is in place. The image ships only system deps and
-#    project sources; .venv lives on a named volume so it persists across
-#    runs.
+# 0. Install the project. The image ships only system deps and project
+#    sources; UV_PROJECT_ENVIRONMENT points at the container's system Python,
+#    so this installs there rather than into a virtualenv.
 # -----------------------------------------------------------------------------
-log "uv sync (venv=/app/.venv)"
+log "uv sync (env=${UV_PROJECT_ENVIRONMENT:-.venv})"
 uv sync --frozen --no-dev
 
 # -----------------------------------------------------------------------------

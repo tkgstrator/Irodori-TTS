@@ -25,7 +25,7 @@ services:
       - ../../outputs:/app/outputs
       - ../../models:/app/models
       - hf_cache:/root/.cache/huggingface
-      - train_venv:/app/.venv
+      - uv_cache:/root/.cache/uv
     deploy:
       resources:
         reservations:
@@ -36,4 +36,4 @@ services:
 
 volumes:
   hf_cache:
-  train_venv:
+  uv_cache:
