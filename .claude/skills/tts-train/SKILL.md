@@ -29,7 +29,7 @@ Note the path shape differs between rows. v2 and v3 each have a per-generation d
 Two things to know about the v4 row:
 
 - The file's header comment names `Irodori-TTS-v4-Small`, but all 39 of its `model:` fields match the **v4.1** checkpoint exactly. v4 and v4.1 have byte-identical architecture; the v4.1 release replaced and retrained only the duration predictor weights, and the v4-Small model card itself recommends using v4.1 instead. So the config is correct for v4.1 despite the comment. Use v4.1.
-- The executable launchers (`docker/train/entrypoint.sh`, `scripts/train/train_multi_speaker.sh`, `scripts/train/stream_pipeline.sh`) still default to the v3 config and the v3 checkpoint. All three honor `CONFIG` and `BASE_CKPT` environment overrides, so driving v4 through a launcher means setting both; otherwise invoke `train.py` directly as in step 4.
+- `docker/train/entrypoint.sh` and `scripts/train/train_multi_speaker.sh` still default to the v3 config and the v3 checkpoint (`scripts/train/stream_pipeline.sh` defaults to v4 since the 2026-09 campaign rewrite). All three honor `CONFIG` and `BASE_CKPT` environment overrides. **The `irodori-tts-train:v4` docker image bakes `ENV BASE_CKPT=/app/models/Irodori-TTS-500M-v3/model.safetensors` into the image itself**, which silently overrides any script default — a container run must always pass `-e BASE_CKPT=...` explicitly or every training launch fails with "base checkpoint not found" (see the cluster section below; this burned the first pilot).
 
 A LoRA adapter is only valid against the generation it was trained on. If the user asks for v2 or v3, confirm they also intend to run it against the matching base at inference time — `configs/runtime.yaml` decides which base the server loads, so check it before promising an adapter is servable. `docs/TRAINING.md` is still written against the v2 flow; treat it as out of date on anything version-specific.
 
@@ -40,8 +40,8 @@ Compared with `configs/train_500m_v3/lora/default.yaml`, these are the differenc
 1. **Caption conditioning is on** — `use_caption_condition: true` with `caption_tokenizer_repo` / `caption_dim: 512` / `caption_add_bos: true`, and `max_caption_len: 512`, `caption_condition_dropout: 0.1`. v3 had no caption branch at all. See "Do captions and speaker ids need to be in the dataset?" below before promising anything about it.
 2. **The text encoder is a pretrained ModernBERT** — `text_encoder_type: pretrained`, `text_tokenizer_repo: sbintuitions/modernbert-ja-310m` pinned at revision `77675fc96a7e445e982e2ba90246b816efc74ec6`, with `pretrained_projector_type: residual_mlp`. v3 trained its own text stack (`text_layers: 10`, `text_heads: 8`). Two operator-visible consequences. First, `train.py` fetches that tokenizer and its `AutoConfig` from HuggingFace during startup, so the repo must be reachable or already in the HF cache. Second, the backbone *weights* are not fetched — when `--init-checkpoint` points at a checkpoint that carries a pretrained encoder, `train.py` takes the weights and the encoder config from that checkpoint instead. So `--init-checkpoint` is not optional in practice on v4. The backbone gets its own `pretrained_text_encoder_learning_rate: 1e-5`, separate from `learning_rate`.
 3. **There is no automatic early stopping.** The v3 config set `early_stop_enabled: true` with a patience backstop. The v4 config sets no `early_stop_*` key at all, and the dataclass default in `irodori_tts/config.py` is `early_stop_enabled: false`. On v4 nothing will stop the run before `max_steps`, so the manual policy in step 4 is the only stopping mechanism. This makes watching `val_loss` more important than it was on v3, not less.
-4. **There is no sample generation.** The v3 config carried a `sample_generation:` block with `enabled: true`; the v4 config has no such block, and `SampleGenerationConfig.enabled` defaults to `false`. A v4 run therefore writes **no** `samples/` directory, and no CLI flag can turn it on — `train.py --help` exposes nothing for it. To get audio samples during training, copy the config and add a `sample_generation:` block; prompts are still auto-filled from `<dataset_dir>/config.yaml`'s `sample_texts`, or picked from the manifest, when `prompts:` is omitted.
-5. **W&B is off by default.** v3 had `wandb_enabled: true` and `wandb_project: ${WANDB_PROJECT:irodori-tts-v3}`, expanded from the environment at load time. The v4 config has `wandb_enabled: false`, an empty `wandb_project`, and no `${...}` expansion anywhere. Logging to W&B on v4 means passing `--wandb` and `--wandb-project <name>` explicitly; exporting `WANDB_PROJECT` alone no longer does anything.
+4. **Sample generation is enabled in the config** (since commits 7ab9d67 / fb7ea61, 2026-09): `configs/train_v4_small_lora.yaml` now carries a `sample_generation:` block with `enabled: true`, `every: 500`, `on_best_val: true`, `codec_device: cpu`. Runs write a `samples/` directory. Prompts auto-fill from `<dataset_dir>/config.yaml`'s `sample_texts`, or are picked length-balanced from the manifest.
+5. **W&B is enabled in the config** (since commit d5c9651): `wandb_enabled: true`, `wandb_project: irodori-tts-v4`, `wandb_mode: online`. No `--wandb` flag is needed. If no working credentials are available (see the cluster section: the CF Access service token for `wandb.tkgstrator.work` is not always present in the env files), set `WANDB_MODE=offline` in the environment rather than letting `wandb.init()` fail — a failed init once killed 15 speaker runs before they touched the GPU. Offline runs can be pushed later with `wandb sync`. To disable entirely, pass `--no-wandb` (`irodori_tts/training/cli_args.py`).
 6. **Long reference sampling** — `ref_min_seconds: 1.0`, `ref_max_seconds: 120.0`. Each step concatenates several same-speaker clips into one long reference. This engages only when the manifest carries `speaker_id`; see below.
 7. Architecture differences with no operator-facing action, listed so they are not mistaken for something to tune: `speaker_patch_size: 4` (v3: 1), a dual-adaRN duration predictor (`duration_architecture: token_sum_dual_adarn_zero_no_aux` with `duration_caption_fusion: adarn_zero`, versus v3's single-adaRN speaker-only form), and `duration_loss_weight: 1.0` (v3: 0.1). Do not carry v3 values onto these.
 
@@ -78,8 +78,7 @@ When the skill is invoked, **always start by asking the user** what to train. Ev
    - `--save-every 1000`
    - `--checkpoint-best-n 5`
    - `--valid-ratio 0.0005`, `--valid-every 1000` (v3 used 200; v4 validates five times less often)
-   - `--wandb` — required to enable W&B at all, since the v4 config has `wandb_enabled: false`.
-   - `--wandb-project <name>` — the v4 config leaves this empty and does no `${VAR}` expansion, so exporting `WANDB_PROJECT` is **not** enough; pass the flag.
+   - W&B: the v4 config now sets `wandb_enabled: true`, `wandb_project: irodori-tts-v4`, `wandb_mode: online`. The config's `wandb_mode: online` **wins over the `WANDB_MODE` env var** — to run without server access pass `--wandb-mode offline` (or `--no-wandb`), not just the env var.
    - `--wandb-run-name <speaker>_lora_v4` — the launchers set this per speaker; the config leaves it empty.
 6. **Resume** — ask whether to resume from an existing checkpoint.
 
@@ -164,7 +163,7 @@ When training finishes (or the user stops it), list the checkpoints under `outpu
 - `checkpoint_best_val_loss_<step:07d>_<val_loss:.6f>` — best-N by validation loss (e.g. `checkpoint_best_val_loss_0002400_0.312100`)
 - `checkpoint_final` — final step
 
-With the stock v4 config there is **no** `outputs/<speaker>_lora/samples/` directory, because `sample_generation` is not enabled (see "What is different when training on v4"). Checkpoints have to be A/B'd by ear after the fact with `infer_with_adapter.py` below, or by adding a `sample_generation:` block to a copied config before the run starts. Only v3 runs get samples for free.
+The stock v4 config now enables `sample_generation` (every 500 steps and on best-val), so runs write `outputs/<speaker>_lora/samples/` for by-ear comparison. `infer_with_adapter.py` below remains the way to A/B checkpoints after the fact.
 
 Recommended next actions:
 
@@ -181,6 +180,37 @@ Recommended next actions:
 - A manual `speakers:` list in `configs/runtime.yaml` (`uuid` / `name` / `adapter` / `defaults` / `category_id` / `category_label`) is still honored and is appended after auto-discovery, but it is the legacy path. Use it only if the user asks for it explicitly.
 - Sanity-check quality before exporting with `PYTHONPATH=. uv run python scripts/lora/infer_with_adapter.py --base <base>.safetensors --adapter outputs/<speaker>_lora/<checkpoint_dir> --text "..." --no-ref --output sample.wav` (this script needs `PYTHONPATH=.`). `--base` must be the same generation the adapter was trained on. Be aware this script has **no `--caption` flag**, so it cannot exercise v4's caption branch; use it for text and reference checks only.
 - Merged safetensors are not needed; the server loads base + LoRA directly.
+
+## Cluster campaign (many speakers on g20/g21/g25)
+
+How the 2026-09 campaign for 183 speakers (gi_/hsr_/wuwa_) was run. The cluster checkout is the shared NFS home `~smorimoto/Developer/Irodori-TTS-v4` (see the cluster memory note: g17-g25 are the training nodes; GPUs are shared with other departments).
+
+The flow: `scripts/train/stream_pipeline.sh` runs one worker per GPU; each worker atomically claims a speaker via a claim file in `locks/<campaign>/` (repo-relative, so NFS-shared — several machines split the list without a coordinator), runs `prepare_manifest.py` if `manifest.jsonl`/`latents/` are missing, then delegates the training launch to `train_multi_speaker.sh` (which owns step budgeting `TARGET_EPOCHS=40` clamped to [500, 10000] steps, LR-ratio rescaling, resume, W&B naming).
+
+Launch, one container per node (adjust `GPUS` to that node's free indices — `nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | awk -F', *' '$2<1000{print $1}'`):
+
+```
+docker run -d --name irodori-stream-v4 --gpus all \
+  --env-file /home/smorimoto/Developer/Irodori-TTS-v4/.train-env \
+  -e BASE_CKPT=/app/models/Irodori-TTS-v4.1-Small/model.safetensors \
+  -e CONFIG=configs/train_v4_small_lora.yaml \
+  -e EXTRA_TRAIN_ARGS="--wandb-mode offline" \
+  -v /home/smorimoto/Developer/Irodori-TTS-v4:/app \
+  -v irodori_v4_venv:/app/.venv \
+  -v irodori_v4_hf:/root/.cache/huggingface \
+  -w /app --entrypoint bash irodori-tts-train:v4 \
+  -c "uv sync --frozen --no-dev >> logs/stream-<node>.log 2>&1 && GPUS=\"<indices>\" scripts/train/stream_pipeline.sh >> logs/stream-<node>.log 2>&1"
+```
+
+Traps hit while setting this up, in the order they fired:
+
+1. **The image bakes `ENV BASE_CKPT=<v3 path>`.** Script-level v4 defaults never apply inside the container; without `-e BASE_CKPT=...` every launch dies with "base checkpoint not found" after prep succeeds.
+2. **`configs/train_v4_small_lora.yaml` pins `wandb_mode: online` and the config wins over the `WANDB_MODE` env var.** With `wandb.tkgstrator.work` behind Cloudflare Access and no service token on the cluster, `wandb.init()` throws `CommError` ("invalid character '<'" — it got the CF HTML page) and the run dies before touching the GPU. Pass `--wandb-mode offline` via `EXTRA_TRAIN_ARGS`; offline run dirs land in `./wandb` and are pushed later with `wandb sync`. A quick reachability probe: `curl -s -o /dev/null -w '%{http_code}' https://wandb.tkgstrator.work/healthz` — a cloudflare 302 means blocked.
+3. **A failed train marks the speaker `.done` and the worker moves on** (deliberate, to avoid retry loops). A systemic failure like 1 or 2 therefore burns through the whole list at one speaker per ~2 min per worker — on any early failure, `docker rm -f` the containers FIRST, then diagnose. Completed prep work survives (latents/manifest stay), so burned locks lose nothing; reset with `rm -rf locks/<campaign>` and relaunch.
+4. **`data/` and `locks/` are root-owned on NFS** (created by the extraction containers). Cleanup and resets need to go through a container: `docker run --rm -v <repo>:/app ubuntu:24.04 rm -rf /app/locks/stream_v4`. No passwordless sudo on the nodes.
+5. **A prep interrupted by a container kill leaves partial `latents/` + a short `manifest.jsonl`** (the manifest is written streaming). The skip check only tests existence/non-emptiness, so delete both before that speaker is retried, or it will train on the truncated manifest.
+
+Monitoring: `tail logs/stream-<node>.log` for claims/failures, `outputs/<sid>_lora/train.log` for steps, `ls locks/<campaign> | wc -l` versus 2x the speaker count for overall progress (each finished speaker has `.claimed` + `.done`). Throughput observed: ~1.4 s/step on the shared A100s, so a 500-step speaker is ~12 min + prep (~2 min per 800 clips).
 
 ## Out of scope
 
