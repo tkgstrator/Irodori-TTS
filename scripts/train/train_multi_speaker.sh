@@ -217,12 +217,41 @@ run_queue() {
 
     # shellcheck disable=SC2206
     local extra=(${EXTRA_TRAIN_ARGS:-})
+
+    # Budget steps by dataset size. A fixed step count overtrains the small
+    # speakers badly: at 74 clips a run is already 60 epochs deep after 30
+    # steps. Scale by epochs instead, clamped so the tiny sets still get a
+    # real run and the big ones do not run away. Set TARGET_EPOCHS=0 to opt
+    # out and rely on --max-steps from EXTRA_TRAIN_ARGS.
+    #
+    # The schedule has to move with it. The config pins warmup_steps=1000 and
+    # stable_steps=24000, which assume the stock 30000-step run; leave them
+    # alone under a 500-step budget and the entire run sits inside warmup,
+    # ending at half the target learning rate having barely moved the adapter.
+    # Passing the ratios instead makes train.py recompute warmup, stable and
+    # decay from whatever max_steps ends up being.
+    local epochs="${TARGET_EPOCHS:-40}"
+    if [ "${epochs}" != "0" ] && [[ ! " ${extra[*]} " == *" --max-steps "* ]]; then
+      local eff_batch="${EFFECTIVE_BATCH:-80}"
+      local scaled=$(( manifest_size * epochs / eff_batch ))
+      [ "${scaled}" -lt "${MIN_STEPS:-500}" ] && scaled="${MIN_STEPS:-500}"
+      [ "${scaled}" -gt "${MAX_STEPS_CAP:-10000}" ] && scaled="${MAX_STEPS_CAP:-10000}"
+      echo "[${speaker}] steps=${scaled} (${manifest_size} clips, ~${epochs} epochs at batch ${eff_batch})"
+      extra+=(--max-steps "${scaled}")
+      if [[ ! " ${extra[*]} " == *" --warmup-ratio "* ]]; then
+        extra+=(--warmup-ratio "${WARMUP_RATIO:-0.05}")
+      fi
+      if [[ ! " ${extra[*]} " == *" --decay-ratio "* ]]; then
+        extra+=(--decay-ratio "${DECAY_RATIO:-0.30}")
+      fi
+    fi
+
     CUDA_VISIBLE_DEVICES="${gpu}" \
     uv run --no-sync python train.py \
       --config "${CONFIG}" \
       --manifest "${manifest}" \
       --output-dir "${outdir}" \
-      --wandb-run-name "${speaker}_lora_v3" \
+      --wandb-run-name "${speaker}_lora_v4" \
       "${init_args[@]}" \
       "${extra[@]}" \
       >> "${log}" 2>&1

@@ -2,20 +2,33 @@
 # Stream extractions into prep_manifest + train as each speaker finishes.
 #
 # Pre-conditions:
-#   - rebuild_speaker_dataset.py invocations are running (or have completed)
-#     for SPEAKERS, writing data/<sid>/metadata.jsonl when done.
-#   - configs/train_500m_v3/lora/default.yaml exists.
-#   - models/Irodori-TTS-500M-v3/model.safetensors exists.
+#   - data/<sid>/metadata.jsonl exists for every requested speaker
+#     (rebuild_many_speakers.py / rebuild_speaker_dataset.py output).
+#   - configs/train_v4_small_lora.yaml exists.
+#   - models/Irodori-TTS-v4.1-Small/model.safetensors exists.
 #
 # Each GPU runs a worker that claims one ready speaker at a time, runs
-# prepare_manifest.py + train.py on it, then moves to the next speaker.
-# This way extraction, prep, and train overlap; trainings start as soon
-# as their inputs are ready instead of waiting for the whole batch.
+# prepare_manifest.py on it, then hands it to train_multi_speaker.sh
+# (which owns step budgeting, LR-schedule scaling, resume, and W&B
+# naming). Prep, and training of already-prepped speakers, overlap.
+#
+# LOCK_DIR defaults to locks/<campaign> inside the repo, so on a shared
+# NFS checkout several machines can run this concurrently and split the
+# speaker list between them via atomic claim files.
+#
+# Environment knobs:
+#   SPEAKERS   - comma/space-separated speaker ids (or pass as args).
+#                Default: every data/*/ dir with a metadata.jsonl but no
+#                manifest.jsonl-and-checkpoint yet is NOT assumed; the
+#                default is every gi_*/hsr_*/wuwa_* dir with metadata.jsonl.
+#   GPUS       - GPU indices for this machine's workers, e.g. "1 4 7".
+#   CONFIG     - train config. Default: configs/train_v4_small_lora.yaml
+#   BASE_CKPT  - base checkpoint. Default: models/Irodori-TTS-v4.1-Small/model.safetensors
+#   LOCK_DIR   - claim dir shared across machines. Default: locks/stream_v4
+#   TARGET_EPOCHS etc. pass through to train_multi_speaker.sh.
 
 set -uo pipefail
 cd "$(dirname "$0")/../.."
-
-DEFAULT_SPEAKERS=(mualani yae_miko lumine mavuika hu_tao ningguang raiden ayaka beidou jean sayu eula ganyu)
 
 if [ $# -gt 0 ]; then
   SPEAKERS=("$@")
@@ -23,13 +36,21 @@ elif [ -n "${SPEAKERS:-}" ]; then
   # shellcheck disable=SC2206
   SPEAKERS=(${SPEAKERS//,/ })
 else
-  SPEAKERS=("${DEFAULT_SPEAKERS[@]}")
+  SPEAKERS=()
+  for meta in data/gi_*/metadata.jsonl data/hsr_*/metadata.jsonl data/wuwa_*/metadata.jsonl; do
+    [ -f "$meta" ] || continue
+    SPEAKERS+=("$(basename "$(dirname "$meta")")")
+  done
+fi
+if [ "${#SPEAKERS[@]}" -eq 0 ]; then
+  echo "ERROR: no speakers (no args, no SPEAKERS env, no data/{gi,hsr,wuwa}_*/metadata.jsonl)" >&2
+  exit 1
 fi
 
 GPUS=(${GPUS:-0 3 4 5 6 7})
-CONFIG="${CONFIG:-configs/train_500m_v3/lora/default.yaml}"
-BASE_CKPT="${BASE_CKPT:-models/Irodori-TTS-500M-v3/model.safetensors}"
-LOCK_DIR="${LOCK_DIR:-/tmp/genshin_pipeline}"
+CONFIG="${CONFIG:-configs/train_v4_small_lora.yaml}"
+BASE_CKPT="${BASE_CKPT:-models/Irodori-TTS-v4.1-Small/model.safetensors}"
+LOCK_DIR="${LOCK_DIR:-locks/stream_v4}"
 mkdir -p "$LOCK_DIR"
 
 if [ -f .env ]; then
@@ -39,11 +60,8 @@ fi
 is_extraction_done() {
   local sid="$1"
   local meta="data/${sid}/metadata.jsonl"
-  [ -f "$meta" ] || return 1
-  # Still running if any rebuild process is targeting this speaker's output dir.
-  pgrep -f "rebuild_speaker_dataset.*--output-dir data/${sid}\b" >/dev/null 2>&1 && return 1
-  # Sanity: non-empty manifest.
   [ -s "$meta" ] || return 1
+  pgrep -f "rebuild_(speaker_dataset|many_speakers).*${sid}" >/dev/null 2>&1 && return 1
   return 0
 }
 
@@ -52,8 +70,8 @@ claim_speaker() {
     [ -f "${LOCK_DIR}/${sid}.claimed" ] && continue
     [ -f "${LOCK_DIR}/${sid}.done" ] && continue
     is_extraction_done "$sid" || continue
-    # noclobber-based atomic claim
-    if (set -C; printf '%s' "$$" > "${LOCK_DIR}/${sid}.claimed") 2>/dev/null; then
+    # noclobber-based atomic claim (works across NFS clients)
+    if (set -C; printf '%s' "$(hostname -s):$$" > "${LOCK_DIR}/${sid}.claimed") 2>/dev/null; then
       printf '%s' "$sid"
       return 0
     fi
@@ -67,27 +85,6 @@ all_speakers_done() {
     [ -f "${LOCK_DIR}/${s}.done" ] && n_done=$((n_done + 1))
   done
   [ "$n_done" -eq "${#SPEAKERS[@]}" ]
-}
-
-find_latest_checkpoint() {
-  local outdir="$1"
-  local latest=""
-  local latest_step=-1
-  shopt -s nullglob
-  for path in "${outdir}"/checkpoint_[0-9]*; do
-    [ -d "${path}" ] || continue
-    local step
-    step="$(basename "${path}")"
-    step="${step#checkpoint_}"
-    step="${step%%[!0-9]*}"
-    [ -z "${step}" ] && continue
-    if [ "${step}" -gt "${latest_step}" ]; then
-      latest_step="${step}"
-      latest="${path}"
-    fi
-  done
-  shopt -u nullglob
-  printf '%s' "${latest}"
 }
 
 worker() {
@@ -105,14 +102,11 @@ worker() {
     fi
     echo "[gpu=${gpu}][${sid}] claimed"
 
-    local out="outputs/${sid}_lora"
     local prep_log="data/${sid}/preprocess.log"
-    mkdir -p "$out"
 
-    # prep_manifest if latents not yet built.
     if [ ! -f "data/${sid}/manifest.jsonl" ] || [ ! -d "data/${sid}/latents" ] \
         || [ -z "$(ls -A "data/${sid}/latents" 2>/dev/null)" ]; then
-      echo "=== prep_manifest $(date -u +%Y-%m-%dT%H:%M:%SZ) gpu=${gpu} ===" >> "$prep_log"
+      echo "=== prep_manifest $(date -u +%Y-%m-%dT%H:%M:%SZ) host=$(hostname -s) gpu=${gpu} ===" >> "$prep_log"
       echo "[gpu=${gpu}][${sid}] prep_manifest"
       CUDA_VISIBLE_DEVICES="$gpu" uv run --no-sync python prepare_manifest.py \
         --dataset json \
@@ -128,35 +122,19 @@ worker() {
       if [ "$rc" -ne 0 ]; then
         echo "[gpu=${gpu}][${sid}] prep_manifest FAILED rc=${rc}" >&2
         rm -f "${LOCK_DIR}/${sid}.claimed"
+        sleep 10
         continue
       fi
     fi
 
-    # train
-    local train_log="${out}/train.log"
-    echo "=== train $(date -u +%Y-%m-%dT%H:%M:%SZ) gpu=${gpu} ===" >> "$train_log"
-    local resume_path=""
-    if [ "${NO_RESUME:-false}" != "true" ]; then
-      resume_path="$(find_latest_checkpoint "$out")"
-    fi
-    local resume_args=()
-    if [ -n "$resume_path" ]; then
-      echo "[gpu=${gpu}][${sid}] resume from ${resume_path}"
-      resume_args=(--resume "$resume_path" --init-checkpoint "$BASE_CKPT")
-    else
-      resume_args=(--init-checkpoint "$BASE_CKPT")
-    fi
     echo "[gpu=${gpu}][${sid}] train"
-    CUDA_VISIBLE_DEVICES="$gpu" uv run --no-sync python train.py \
-      --config "$CONFIG" \
-      --manifest "data/${sid}/manifest.jsonl" \
-      --output-dir "$out" \
-      --wandb-run-name "${sid}_lora_v3" \
-      "${resume_args[@]}" \
-      >> "$train_log" 2>&1
+    GPUS="$gpu" CONFIG="$CONFIG" BASE_CKPT="$BASE_CKPT" \
+      scripts/train/train_multi_speaker.sh "$sid"
     local rc=$?
     if [ "$rc" -ne 0 ]; then
       echo "[gpu=${gpu}][${sid}] train FAILED rc=${rc}" >&2
+      # marked .done anyway so workers move on instead of retry-looping;
+      # to retry later, remove the .claimed and .done files for this sid
     else
       echo "[gpu=${gpu}][${sid}] train DONE"
     fi
@@ -164,9 +142,12 @@ worker() {
   done
 }
 
-echo "=== stream_pipeline start: speakers=${#SPEAKERS[@]} gpus=${GPUS[*]} ==="
+echo "=== stream_pipeline start: host=$(hostname -s) speakers=${#SPEAKERS[@]} gpus=${GPUS[*]} ==="
+echo "config:    ${CONFIG}"
+echo "base_ckpt: ${BASE_CKPT}"
+echo "lock_dir:  ${LOCK_DIR}"
 for gpu in "${GPUS[@]}"; do
   worker "$gpu" &
 done
 wait
-echo "=== stream_pipeline all done ==="
+echo "=== stream_pipeline all done: host=$(hostname -s) ==="

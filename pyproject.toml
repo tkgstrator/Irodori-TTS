@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Irodori-TTS training and inference codebase"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "dacvae",
     "datasets>=3.0.0",
@@ -17,7 +17,7 @@ dependencies = [
     "pyyaml>=6.0",
     "safetensors>=0.7.0",
     "soundfile>=0.12.0",
-    "sentencepiece>=0.1.99,<0.2",
+    "sentencepiece>=0.2.0,<0.3",
     "silentcipher @ git+https://github.com/SesameAILabs/silentcipher.git@d46d7d0893a583d8968ab3a6626e2289faec9152",
     "torch>=2.10.0",
     "torchaudio>=2.10.0",
@@ -119,7 +119,7 @@ explicit = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = [
@@ -168,7 +168,7 @@ ignore = [
 # Files inherited from Aratako/Irodori-TTS keep the original baseline rules only.
 # Reformatting them here would conflict on every upstream merge. Drop a file from
 # these lists once it has genuinely diverged and is maintained by this fork.
-"{convert_checkpoint_to_safetensors,gradio_app,gradio_app_voicedesign,infer,prepare_manifest,quantize_checkpoint,train}.py" = [
+"{convert_checkpoint_to_safetensors,gradio_app,gradio_app_voicedesign,infer,prepare_manifest,quantize_checkpoint}.py" = [
     "C90", "PL", "SIM", "RET", "ARG", "PTH", "RUF",
     "N", "A", "ISC", "ICN", "PIE", "TID",
     "PERF", "FURB", "LOG", "G", "DTZ", "TRY", "SLF",
@@ -192,7 +192,6 @@ exclude = [
     "infer.py",
     "prepare_manifest.py",
     "quantize_checkpoint.py",
-    "train.py",
     "irodori_tts/codec.py",
     "irodori_tts/config.py",
     "irodori_tts/dataset.py",

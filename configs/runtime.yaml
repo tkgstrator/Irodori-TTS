@@ -1,6 +1,11 @@
-base_checkpoint: models/Irodori-TTS-500M-v3/model.safetensors
-base_hf_repo: Aratako/Irodori-TTS-500M-v3
-base_hf_filename: model.safetensors
+# Which upstream generation to serve. The repo id is derived from this, so the
+# adapters under lora_dir must be trained against the same generation.
+# Known values: v4.1-small, v4-small, v3, v2, v1.
+base_version: v4.1-small
+# base_hf_repo / base_hf_filename override the alias for a fork or a renamed
+# weight file; base_hf_repo and base_version are mutually exclusive.
+# base_checkpoint points at an already-downloaded file and skips the fetch.
+# base_checkpoint: models/Irodori-TTS-v4.1-Small/model.safetensors
 
 model_device: cuda
 codec_device: cuda
@@ -10,16 +15,21 @@ codec_repo: Aratako/Semantic-DACVAE-Japanese-32dim
 codec_deterministic_encode: true
 codec_deterministic_decode: true
 
-# VoiceDesign (caption) runtime — loaded alongside the LoRA base model.
-# If both caption_checkpoint and caption_hf_repo are omitted, caption
-# speakers in VDS scripts will return 501.
-caption_checkpoint: models/Irodori-TTS-500M-v2-VoiceDesign/model.safetensors
-caption_hf_repo: Aratako/Irodori-TTS-500M-v2-VoiceDesign
-caption_hf_filename: model.safetensors
+# VoiceDesign (caption) conditioning is part of the unified v4.1 base above, so
+# no second runtime is loaded and caption speakers work out of the box.
+# caption_checkpoint / caption_hf_repo remain as an override: set them to load a
+# separate VoiceDesign checkpoint alongside a legacy v2/v3 base, e.g.
+#   caption_checkpoint: models/Irodori-TTS-500M-v2-VoiceDesign/model.safetensors
+#   caption_hf_repo: Aratako/Irodori-TTS-500M-v2-VoiceDesign
+#   caption_hf_filename: model.safetensors
+# With a caption-incapable base and no override, caption speakers return 501.
 
 # LoRA adapters are auto-discovered as single-file .safetensors exports under
-# this directory. Each file carries its own metadata (name, uuid, defaults,
-# adapter_config) so no per-speaker block is required.
+# this directory, searched recursively, so the published layout
+# (<generation>/<category>/<speaker>.safetensors) can be downloaded as-is. Each
+# file carries its own metadata (name, uuid, defaults, adapter_config) so no
+# per-speaker block is required. Keep only one generation's adapters under this
+# directory: a v3 adapter loaded against the v4.1 base is a mismatch.
 #
 # To add a new speaker: export a PEFT checkpoint to a .safetensors file with
 #   uv run python scripts/lora/export_lora_to_safetensors.py \

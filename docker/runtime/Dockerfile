@@ -2,25 +2,25 @@
 #
 # Runtime image for the Irodori-TTS FastAPI server.
 #
-# This image is intentionally slim. At runtime the entrypoint only runs
-# `uv sync --frozen --no-dev` into /app/.venv (mount as a named volume so the
-# venv persists across restarts) and then launches server.py.
+# The entrypoint installs the project into the container's system Python
+# on start — no virtualenv, which the container already makes redundant, and
+# nothing for a bind mount to shadow or for a throwaway `uv run` on the same
+# host to delete mid-serve. UV_PROJECT_ENVIRONMENT is /usr/local rather than
+# /usr because uv requires a bin/python in the target environment and Debian
+# ships only python3 there. Mount the uv cache (/root/.cache/uv) for speed.
 #
 # Everything else is supplied by the user via bind mounts:
 #   - /app/config.yaml              (server config YAML)
-#   - /app/models/...               (base checkpoint referenced from config)
-#   - /app/outputs/...              (LoRA adapter directories referenced from config)
+#   - /app/models/...               (base checkpoint and LoRA adapters)
 #
 # Build (from repo root):
-#   docker build -f docker/runtime/Dockerfile -t tkgling/irodori-tts .
+#   docker build -f docker/runtime/Dockerfile -t ghcr.io/tkgstrator/irodori-tts .
 # Run:
 #   docker run --gpus all -p 8765:8765 \
 #     -v ./configs/runtime.yaml:/app/config.yaml:ro \
-#     -v ./outputs:/app/outputs:ro \
 #     -v tts_models:/app/models \
-#     -v tts_venv:/app/.venv \
 #     -v tts_hf_cache:/root/.cache/huggingface \
-#     tkgling/irodori-tts
+#     ghcr.io/tkgstrator/irodori-tts
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -28,6 +28,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     HF_HOME=/root/.cache/huggingface \
+    UV_PROJECT_ENVIRONMENT=/usr/local \
     TTS_CONFIG=/app/config.yaml \
     TTS_HOST=0.0.0.0 \
     TTS_PORT=8765

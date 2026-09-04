@@ -20,14 +20,15 @@ When the skill is invoked, **always start by asking the user** what to process. 
 1. **Input source** — one of:
    - An existing flat directory of audio files (e.g. `data/_raw_ema/`)
    - A zip file with a filter pattern (e.g. `data/Voice.zip` matching `Voice/*Ema*.ogg` excluding `*EmaFake*`)
-2. **Output directory** — dataset root (e.g. `data/ema`). Audio files are written under `<output_dir>/wavs/` (kept as `.ogg`; the `wavs/` name is conventional). Metadata files go directly under `<output_dir>/`.
-3. **Parameters** — present these defaults and ask whether to change any:
+2. **Output directory** — dataset root (e.g. `data/ema`). Audio files are written under `<output_dir>/wavs/` (kept as `.ogg`; the `wavs/` name is conventional). Metadata files go directly under `<output_dir>/`. Downstream `prepare_manifest.py` depends on exactly this layout — `<output_dir>/metadata.jsonl` with a sibling `<output_dir>/wavs/` — so do not rename either.
+3. **Parameters** — present these values and ask whether to change any. Where the script default differs it is noted:
    - `--min-seconds 1.5`
    - `--max-seconds 30.0`
    - `--silence-db -40`
    - `--normalize-lufs -23`
-   - `--whisper-model large-v3`
-   - `--workers 12`
+   - `--model large-v3` (transcribe_dir.py; this is also the script default)
+   - `--workers 12` (preprocess_audio.py; the script default is 8 — 12 is a suggested override, confirm it suits the machine)
+   - `--glob '*.ogg'` — both `preprocess_audio.py` and `transcribe_dir.py` default to `*.ogg`. If the source files are wav/mp3, this must be changed on `preprocess_audio.py` or it will silently find zero files.
 
 Once the answers are collected, summarize the plan and ask for confirmation before running anything.
 
@@ -37,26 +38,45 @@ Working directory: `/home/vscode/app`. Scripts live under `scripts/`.
 
 ### Step 1 — stage input
 
-- If the input is a zip: extract the matching entries (flat, with `unzip -j`) into `data/_<name>_raw/`.
+- If the input is a zip: extract the matching entries (flat, with `unzip -j`) into a staging directory, e.g. `data/_<name>_raw/`.
 - If the input is an existing directory: use it in place.
 
 ### Step 2 — trim + normalize + filter
 
-Use `scripts/preprocess/preprocess_audio.py`. Internally it applies this ffmpeg chain:
+Use `scripts/preprocess/preprocess_audio.py`. It takes three required directory flags — `--src` (staged input), `--dst` (`<output_dir>/wavs`) and `--tmp` (a scratch directory for the ffmpeg output before duration filtering and renumbering):
+
+```
+uv run --no-sync python scripts/preprocess/preprocess_audio.py \
+  --src data/_<name>_raw --dst <output_dir>/wavs --tmp data/_<name>_tmp \
+  --min-seconds 1.5 --max-seconds 30.0 \
+  --silence-db -40 --normalize-lufs -23 --workers 12
+```
+
+Internally it applies this ffmpeg chain and re-encodes to ogg/vorbis (`-c:a libvorbis -q:a 5`):
 
 ```
 silenceremove=1:0:<silence-db>dB,
 areverse,silenceremove=1:0:<silence-db>dB,areverse,
-loudnorm=I=<lufs>:TP=-1.5:LRA=11
+loudnorm=I=<lufs>:TP=-1.5:LRA=11,
+aresample=44100
 ```
 
-`silenceremove=1:0:...` removes a single leading silent period of any length — this is the correct form that does not cut mid-speech (unlike `stop_periods=1:stop_silence=...` which also stops on internal silences). The reverse/trim/reverse pair handles the trailing silence.
+`silenceremove=1:0:...` removes a single leading silent period of any length — this is the correct form that does not cut mid-speech (unlike `stop_periods=1:stop_silence=...` which also stops on internal silences). The reverse/trim/reverse pair handles the trailing silence. The trailing `aresample=44100` fixes the sample rate, which is what the DACVAE encode step later expects.
 
-Output: sequence-renamed files `<output_dir>/wavs/00000.ogg`, `00001.ogg`, ... and `<output_dir>/_source_map.tsv` recording the original filename and post-trim duration for each kept clip.
+Output: sequence-renamed files `<output_dir>/wavs/00000.ogg`, `00001.ogg`, ... and `<output_dir>/wavs/_source_map.tsv` (written into `--dst`, alongside the audio) recording the original filename and post-trim duration for each kept clip.
 
 ### Step 3 — transcribe
 
 Use `scripts/preprocess/transcribe_dir.py` against `<output_dir>/wavs/`. It transcribes every ogg with faster-whisper large-v3, word-level timestamps, and inserts `、` / `。` based on inter-word gaps.
+
+**Pass `--output` explicitly.** The default is `<audio-dir>/metadata_wts.jsonl`, which would land the file inside `wavs/` rather than at the dataset root:
+
+```
+uv run --no-sync python scripts/preprocess/transcribe_dir.py \
+  --audio-dir <output_dir>/wavs \
+  --output <output_dir>/metadata_wts.jsonl \
+  --model large-v3
+```
 
 Output: `<output_dir>/metadata_wts.jsonl` with records `{"file_name": "00000.ogg", "text": "..."}` (file names are relative to `<output_dir>/wavs/`).
 
@@ -67,21 +87,30 @@ Cleaning is a **two-pass** process. The heuristic filter never rewrites text; th
 **Step 4a — heuristic filter** (`scripts/preprocess/filter_metadata_voice.py`): drops records matching any of:
 
 - Text shorter than 3 characters after normalization
+- Non-verbal-only hiragana pattern
 - Repeated-character ratio >= 0.5 (e.g. `ああああ`, `はぁっはぁっ`)
 - ASCII-letter ratio >= 0.3 (English misrecognition)
-- Non-verbal-only hiragana pattern
 - Exact-duplicate text
 
-Writes `<output_dir>/metadata_filtered.jsonl` and `<output_dir>/metadata_rejected.jsonl`. Also re-evaluate non-verbal rejects with the LLM pass before dropping them — some are legitimate short utterances.
+```
+uv run --no-sync python scripts/preprocess/filter_metadata_voice.py \
+  --src <output_dir>/metadata_wts.jsonl \
+  --out <output_dir>/metadata_filtered.jsonl \
+  --rejected <output_dir>/metadata_rejected.jsonl
+```
+
+Writes `<output_dir>/metadata_filtered.jsonl` and `<output_dir>/metadata_rejected.jsonl` (`--rejected` defaults to `metadata_rejected.jsonl` next to `--out`, so passing it is optional). Also re-evaluate non-verbal rejects with the LLM pass before dropping them — some are legitimate short utterances.
 
 **Step 4b — LLM cleaning pass** (Sonnet 4.6, via Agent sub-agents): dispatches batches of ~150 records with two inputs merged at dispatch time:
 
 1. **`.claude/skills/tts-preprocess/voice_cleaning_prompt.md`** — the speaker-agnostic, dataset-agnostic prompt. Covers the acoustic-distance principle for first-person normalization, addressing hints, contextual Japanese error correction, punctuation fixes, and the `suspect:` flag convention. **Do not put speaker- or work-specific facts in this file.**
 2. **`data/<speaker>/config.yaml`** — the per-speaker config. Provides canonical `cleaning.first_person` and `cleaning.addressing` (one of `chan` / `san` / `kun` / `yobisute`). This is the single source of truth for speaker-specific info.
 
-Before running the LLM pass on a new speaker, ensure `data/<speaker>/config.yaml` exists. If not, ask the user for the canonical first-person and addressing convention and create it before dispatching agents.
+Before running the LLM pass on a new speaker, ensure `data/<speaker>/config.yaml` exists. If not, ask the user for the canonical first-person and addressing convention and create it before dispatching agents. The `cleaning:` block is optional — for voice-actor datasets spanning several characters it is legitimately absent, and the prompt handles that case.
 
-Preserve the original Whisper output as `metadata_wts.jsonl` (never modify). The LLM pass writes a diff file `metadata_llm_diff.jsonl` with `{file_name, original, cleaned, reason}`; show the diff to the user for approval before applying it to produce the final `metadata.jsonl`.
+Split the batches with `scripts/clean/split_for_llm.py --src <output_dir>/metadata_filtered.jsonl --out-dir <batch_dir> --batch-size 150`.
+
+Preserve the original Whisper output as `metadata_wts.jsonl` (never modify). The LLM pass writes a diff file `metadata_llm_diff.jsonl` with `{file_name, original, cleaned, reason}`; show the diff to the user for approval before applying it with `scripts/clean/apply_llm_diff.py --src <output_dir>/metadata_filtered.jsonl --diff <output_dir>/metadata_llm_diff.jsonl --out <output_dir>/metadata.jsonl` to produce the final `metadata.jsonl`.
 
 ### Step 5 — report
 
@@ -92,17 +121,19 @@ Report counts after each step:
 - transcribe: N files
 - clean: kept=X, rejected=Y
 
-At the end, tell the user what comes next: run `prepare_manifest.py` to encode DACVAE latents, then launch LoRA training.
+At the end, tell the user what comes next: run `prepare_manifest.py` to encode DACVAE latents into `<output_dir>/latents/` and emit `<output_dir>/manifest.jsonl`, then launch LoRA training (see the `tts-train` skill for the exact invocation).
 
 ## Logging
 
 **Always redirect each step's stdout/stderr into `<output_dir>/preprocess.log`** so the user can tail progress in another terminal. Use `tee -a` (append) so every step contributes to the same file. Example:
 
 ```
-uv run --no-sync python scripts/preprocess/preprocess_audio.py ... 2>&1 | tee -a data/ema/preprocess.log
-uv run --no-sync python scripts/preprocess/transcribe_dir.py  ... 2>&1 | tee -a data/ema/preprocess.log
-uv run --no-sync python scripts/clean/clean_metadata_auto.py ... 2>&1 | tee -a data/ema/preprocess.log
+uv run --no-sync python scripts/preprocess/preprocess_audio.py       ... 2>&1 | tee -a data/ema/preprocess.log
+uv run --no-sync python scripts/preprocess/transcribe_dir.py         ... 2>&1 | tee -a data/ema/preprocess.log
+uv run --no-sync python scripts/preprocess/filter_metadata_voice.py  ... 2>&1 | tee -a data/ema/preprocess.log
 ```
+
+(`scripts/clean/clean_metadata_auto.py` is an alternative single-shot heuristic cleaner that writes `metadata.jsonl` directly and takes `--drop-duplicates` explicitly. This skill uses the two-pass `filter_metadata_voice.py` route instead, so that the LLM pass sees the rejects.)
 
 Also emit a header line before each step (e.g. `=== step: transcribe ===`) into the log so the sections are visually separated.
 

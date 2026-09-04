@@ -1,7 +1,7 @@
 import json
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 
 @dataclass
@@ -280,9 +280,6 @@ def dump_configs(path: str | Path, model_cfg: ModelConfig, train_cfg: TrainConfi
     save_json(path, {"model": asdict(model_cfg), "train": asdict(train_cfg)})
 
 
-T = TypeVar("T")
-
-
 def load_config_yaml(path: str | Path) -> dict[str, Any]:
     """
     Load a training config YAML. Returns {} for an empty document.
@@ -336,7 +333,7 @@ def merge_sample_generation_overrides(
     return SampleGenerationConfig(prompts=prompts, **payload)
 
 
-def merge_dataclass_overrides(base: T, overrides: dict[str, Any] | None, section: str) -> T:
+def merge_dataclass_overrides[T](base: T, overrides: dict[str, Any] | None, section: str) -> T:
     """
     Merge mapping overrides into a dataclass instance with key validation.
     """

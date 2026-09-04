@@ -24,6 +24,8 @@
     "**/.pytest_cache": true,
     "**/.ruff_cache": true,
     "**/__pycache__": true,
+    "**/.mypy_cache": true,
+    "**/.cache": true,
   },
     "[python]": {
         "editor.defaultFormatter": "charliermarsh.ruff",
