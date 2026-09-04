@@ -8,13 +8,16 @@ server.py / infer.py / the gradio apps rely on.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import importlib
+import pathlib
 
 import pytest
 import torch
 import torchaudio
 
+from irodori_tts import inference_runtime
 from irodori_tts.inference_runtime import (
     RuntimeKey,
     SamplingRequest,
@@ -536,6 +539,39 @@ class TestSaveWav:
 # ===================================================================
 # Import surface
 # ===================================================================
+
+
+class TestCheckpointLoaderCallSites:
+    """`_load_checkpoint_for_inference` is unpacked, never inspected.
+
+    Both runtimes destructure its return value positionally, so growing the
+    tuple silently breaks whichever call site was not updated — and the one
+    the server uses is only reachable with a real checkpoint, so no unit test
+    covers it. Comparing the annotated arity against every call site catches
+    that at import time instead of at model load.
+    """
+
+    def test_every_call_site_unpacks_the_full_tuple(self):
+        source = pathlib.Path(inference_runtime.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        loader = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_load_checkpoint_for_inference"
+        )
+        # -> tuple[A, B, C, D]
+        arity = len(loader.returns.slice.elts)
+
+        widths = [
+            len(node.targets[0].elts)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Tuple)
+            and "_load_checkpoint_for_inference" in ast.dump(node.value)
+        ]
+        assert widths, "no call site found; did the helper get renamed?"
+        assert widths == [arity] * len(widths)
 
 
 class TestPublicApi:
