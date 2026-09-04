@@ -144,6 +144,40 @@ class TestLoadConfigDefaults:
         assert cfg.show_timings is True
         assert cfg.speakers == []
 
+    def test_base_version_resolves_to_upstream_repo(self, tmp_path: Path):
+        cfg = load_config(write_config(tmp_path / "c.yaml", {"base_version": "v4.1-small"}))
+        assert cfg.base_hf_repo == "Aratako/Irodori-TTS-v4.1-Small"
+
+    def test_base_version_is_stripped(self, tmp_path: Path):
+        cfg = load_config(write_config(tmp_path / "c.yaml", {"base_version": "  v3  "}))
+        assert cfg.base_hf_repo == "Aratako/Irodori-TTS-500M-v3"
+
+    def test_unknown_base_version_raises(self, tmp_path: Path):
+        with pytest.raises(ValueError, match="Unknown base_version: 'v5'"):
+            load_config(write_config(tmp_path / "c.yaml", {"base_version": "v5"}))
+
+    def test_base_version_with_explicit_repo_raises(self, tmp_path: Path):
+        with pytest.raises(ValueError, match="not both"):
+            load_config(
+                write_config(
+                    tmp_path / "c.yaml",
+                    {"base_version": "v3", "base_hf_repo": "someone/fork"},
+                )
+            )
+
+    def test_explicit_repo_alone_is_kept(self, tmp_path: Path):
+        cfg = load_config(write_config(tmp_path / "c.yaml", {"base_hf_repo": "someone/fork"}))
+        assert cfg.base_hf_repo == "someone/fork"
+
+    def test_empty_base_version_falls_back_to_explicit_repo(self, tmp_path: Path):
+        cfg = load_config(
+            write_config(
+                tmp_path / "c.yaml",
+                {"base_version": "", "base_hf_repo": "someone/fork"},
+            )
+        )
+        assert cfg.base_hf_repo == "someone/fork"
+
     def test_scalars_are_coerced_to_declared_types(self, tmp_path: Path):
         cfg = load_config(
             write_config(

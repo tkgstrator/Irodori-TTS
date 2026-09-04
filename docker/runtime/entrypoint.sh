@@ -46,20 +46,22 @@ print(f'  cached at {p}')
 "
 }
 
-# Parse config YAML with a small Python snippet to extract checkpoint paths.
+# Read the checkpoint paths through load_config rather than the raw YAML, so
+# base_version resolves to a repo here exactly as it does in the server.
 eval "$(uv run --no-sync python -c "
-import yaml, shlex
-with open('${TTS_CONFIG}') as f:
-    c = yaml.safe_load(f)
+import shlex
+from pathlib import Path
+from irodori_tts.server.config import load_config
+c = load_config(Path('${TTS_CONFIG}'))
 def q(v):
     return shlex.quote(str(v)) if v else \"''\"
-print(f'_BASE_LOCAL={q(c.get(\"base_checkpoint\"))}')
-print(f'_BASE_REPO={q(c.get(\"base_hf_repo\"))}')
-print(f'_BASE_FILE={q(c.get(\"base_hf_filename\", \"model.safetensors\"))}')
-print(f'_CAP_LOCAL={q(c.get(\"caption_checkpoint\"))}')
-print(f'_CAP_REPO={q(c.get(\"caption_hf_repo\"))}')
-print(f'_CAP_FILE={q(c.get(\"caption_hf_filename\", \"model.safetensors\"))}')
-print(f'_CODEC_REPO={q(c.get(\"codec_repo\", \"Aratako/Semantic-DACVAE-Japanese-32dim\"))}')
+print(f'_BASE_LOCAL={q(c.base_checkpoint)}')
+print(f'_BASE_REPO={q(c.base_hf_repo)}')
+print(f'_BASE_FILE={q(c.base_hf_filename)}')
+print(f'_CAP_LOCAL={q(c.caption_checkpoint)}')
+print(f'_CAP_REPO={q(c.caption_hf_repo)}')
+print(f'_CAP_FILE={q(c.caption_hf_filename)}')
+print(f'_CODEC_REPO={q(c.codec_repo)}')
 ")"
 
 download_if_missing "${_BASE_LOCAL}" "${_BASE_REPO}" "${_BASE_FILE}" "base model"
