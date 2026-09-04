@@ -72,11 +72,21 @@ class RuntimeRegistry:
         if self.cfg.speakers:
             base_path = resolve_base_checkpoint(self.cfg)
             adapters = {s.uuid: s.adapter for s in self.cfg.speakers}
-            logger.info("Loading base + %d LoRA adapters", len(adapters))
+            slots = max(0, int(self.cfg.lora_slots))
+            if slots and slots < len(adapters):
+                logger.info(
+                    "Loading base + %d LoRA adapters, %d resident at a time",
+                    len(adapters),
+                    slots,
+                )
+            else:
+                slots = 0
+                logger.info("Loading base + %d LoRA adapters", len(adapters))
             self._runtime = InferenceRuntime.from_base_with_adapters(
                 key=self._make_key(str(base_path)),
                 adapters=adapters,
                 default_adapter=self.cfg.speakers[0].uuid,
+                adapter_slots=slots,
             )
         else:
             logger.warning("No LoRA speakers configured — LoRA synthesis disabled")

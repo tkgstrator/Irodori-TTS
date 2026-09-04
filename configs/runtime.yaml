@@ -38,3 +38,10 @@ codec_deterministic_decode: true
 #     --defaults '{"num_steps": 40, "cfg_scale_text": 3.0, "cfg_scale_speaker": 5.0}'
 # The embedded display name is taken from data/<speaker>/config.yaml speaker.label.
 lora_dir: models/LoRA
+
+# How many adapters stay resident on the device. An r=16 adapter is ~53 MB, so
+# a full speaker set outweighs the base checkpoint and will not fit in VRAM;
+# the rest load on request and the least recently used one is evicted. Raise it
+# if the card has room — a warm adapter answers without paying the load. Set 0
+# to keep every adapter loaded, which only suits a small speaker set.
+lora_slots: 16

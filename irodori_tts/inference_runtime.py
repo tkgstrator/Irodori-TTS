@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import hashlib
 import json
+import logging
 import math
 import secrets
 import threading
@@ -18,6 +19,7 @@ import torchaudio
 from safetensors import safe_open
 from safetensors.torch import load_file as load_safetensors_file
 
+from .adapter_cache import AdapterResidency
 from .codec import DACVAECodec, patchify_latent, unpatchify_latent
 from .config import ModelConfig, merge_dataclass_overrides
 from .duration import build_duration_features
@@ -43,6 +45,8 @@ from .speaker_inversion import (
 from .text_normalization import normalize_text
 from .tokenizer import PretrainedTextTokenizer
 from .watermark import SilentCipherWatermarker
+
+logger = logging.getLogger("irodori_tts.inference")
 
 
 def _is_mps_available() -> bool:
@@ -154,6 +158,14 @@ def _coerce_latent_shape(latent: torch.Tensor, latent_dim: int) -> torch.Tensor:
     raise ValueError(
         f"Could not infer latent layout for shape={tuple(latent.shape)} and latent_dim={latent_dim}"
     )
+
+
+def _resolve_adapter_source(adapter_path: str | Path) -> str:
+    """Path peft can load: a single-file export is unpacked to a directory first."""
+    resolved = Path(adapter_path)
+    if is_lora_safetensors_file(resolved):
+        resolved = unpack_lora_safetensors(resolved)
+    return str(resolved)
 
 
 def find_flattening_point(
@@ -637,6 +649,9 @@ class InferenceRuntime:
         self._infer_lock = threading.Lock()
         self._model_dtype = next(self.model.parameters()).dtype
         self._lora_adapter_names: dict[str, str] = {}
+        # Set by from_base_with_adapters when it is given a slot budget; None
+        # means every adapter this runtime knows about is already loaded.
+        self._adapters: AdapterResidency | None = None
 
     @classmethod
     def from_components(
@@ -810,9 +825,18 @@ class InferenceRuntime:
         key: RuntimeKey,
         adapters: dict[str, str | Path],
         default_adapter: str | None = None,
+        adapter_slots: int = 0,
     ) -> InferenceRuntime:
+        """Base checkpoint plus named LoRA adapters, selected with set_active_adapter.
+
+        `adapter_slots` caps how many adapters stay on the device at once,
+        loading the rest on demand and evicting the least recently used. 0
+        keeps every adapter loaded, which only fits a small speaker set.
+        """
         if not adapters:
             raise ValueError("adapters mapping must not be empty")
+        if adapter_slots < 0:
+            raise ValueError(f"adapter_slots must not be negative: {adapter_slots}")
 
         model_device = resolve_runtime_device(key.model_device)
         codec_device = resolve_runtime_device(key.codec_device)
@@ -848,31 +872,32 @@ class InferenceRuntime:
         base_model.eval()
 
         _, PeftModel, _ = _require_peft()
-        items = list(adapters.items())
+        items = [(str(name), str(path)) for name, path in adapters.items()]
 
-        def _resolve_adapter_dir(adapter_path: str | Path) -> str:
-            resolved = Path(adapter_path)
-            if is_lora_safetensors_file(resolved):
-                resolved = unpack_lora_safetensors(resolved)
-            return str(resolved)
-
-        first_name, first_path = items[0]
+        active = str(default_adapter) if default_adapter is not None else items[0][0]
+        # The active adapter has to be the one PeftModel is constructed with,
+        # since that call is what turns the base model into a PeftModel.
+        first_name, first_path = next((n, p) for n, p in items if n == active)
         peft_model = PeftModel.from_pretrained(
             base_model,
-            _resolve_adapter_dir(first_path),
-            adapter_name=str(first_name),
+            _resolve_adapter_source(first_path),
+            adapter_name=first_name,
             is_trainable=False,
         )
-        for name, adapter_path in items[1:]:
+        resident: list[str] = [first_name]
+        # With a slot budget, the rest load on demand in set_active_adapter;
+        # a full speaker set does not fit in VRAM alongside the base model.
+        preload = [] if adapter_slots else [(n, p) for n, p in items if n != first_name]
+        for name, adapter_path in preload:
             peft_model.load_adapter(
-                _resolve_adapter_dir(adapter_path),
-                adapter_name=str(name),
+                _resolve_adapter_source(adapter_path),
+                adapter_name=name,
                 is_trainable=False,
             )
+            resident.append(name)
         peft_model = peft_model.to(device=model_device, dtype=model_dtype)
         peft_model.eval()
 
-        active = str(default_adapter) if default_adapter is not None else str(first_name)
         peft_model.set_adapter(active)
 
         tokenizer = PretrainedTextTokenizer.from_pretrained(
@@ -917,7 +942,7 @@ class InferenceRuntime:
                 f"Latent dimension mismatch: checkpoint latent_dim={model_cfg.latent_dim} but codec latent_dim={codec.latent_dim}."
             )
 
-        return cls(
+        runtime = cls(
             key=key,
             model_cfg=model_cfg,
             train_cfg=train_cfg if isinstance(train_cfg, dict) else None,
@@ -928,12 +953,47 @@ class InferenceRuntime:
             default_text_max_len=default_text_max_len,
             default_caption_max_len=default_caption_max_len,
         )
+        if adapter_slots:
+            runtime._adapters = AdapterResidency(
+                dict(items), slots=adapter_slots, resident=resident
+            )
+        return runtime
 
     def set_active_adapter(self, name: str) -> None:
         model = self.model
         if not hasattr(model, "set_adapter"):
             raise RuntimeError("This runtime was not initialized with adapters.")
+        self._ensure_adapter_resident(str(name))
         model.set_adapter(str(name))
+
+    def _ensure_adapter_resident(self, name: str) -> None:
+        if self._adapters is None:
+            return
+        self._adapters.ensure(name, load=self._load_adapter, evict=self._evict_adapter)
+
+    def _load_adapter(self, name: str, path: str) -> None:
+        logger.info("loading LoRA adapter: %s", name)
+        self.model.load_adapter(
+            _resolve_adapter_source(path),
+            adapter_name=name,
+            is_trainable=False,
+        )
+        self.model = _move_inference_module(
+            self.model,
+            device=self.model_device,
+            dtype=self._model_dtype,
+        )
+
+    def _evict_adapter(self, name: str) -> None:
+        logger.info("evicting LoRA adapter: %s", name)
+        self.model.delete_adapter(name)
+
+    @property
+    def resident_adapters(self) -> list[str]:
+        """Adapters currently on the device, least recently used first."""
+        if self._adapters is None:
+            return []
+        return self._adapters.resident
 
     def _resolve_lora_adapter_path(self, adapter_path: str | None) -> str | None:
         if adapter_path is None:
