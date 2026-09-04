@@ -194,13 +194,13 @@ docker run -d --name irodori-stream-v4 --gpus all \
   --env-file /home/smorimoto/Developer/Irodori-TTS-v4/.train-env \
   -e BASE_CKPT=/app/models/Irodori-TTS-v4.1-Small/model.safetensors \
   -e CONFIG=configs/train_v4_small_lora.yaml \
-  -e EXTRA_TRAIN_ARGS="--wandb-mode offline" \
   -v /home/smorimoto/Developer/Irodori-TTS-v4:/app \
-  -v irodori_v4_venv:/app/.venv \
   -v irodori_v4_hf:/root/.cache/huggingface \
-  -w /app --entrypoint bash irodori-tts-train:v4 \
-  -c "uv sync --frozen --no-dev >> logs/stream-<node>.log 2>&1 && GPUS=\"<indices>\" scripts/train/stream_pipeline.sh >> logs/stream-<node>.log 2>&1"
+  -w /app --entrypoint bash irodori-tts-train:v4.1 \
+  -c "GPUS=\"<indices>\" scripts/train/stream_pipeline.sh >> logs/stream-<node>.log 2>&1"
 ```
+
+The `irodori-tts-train:v4.1` image bakes the whole Python environment at `/opt/venv` (`UV_PROJECT_ENVIRONMENT`, set in `docker/train/Dockerfile`) at build time — no venv volume, no runtime `uv sync`, and the `/app` bind mount cannot shadow it. Build it on each node from the NFS checkout: `docker build -f docker/train/Dockerfile -t irodori-tts-train:v4.1 .` (Dockerfile.dockerignore keeps data/outputs*/models out of the context). This is the fix for the venv-wipe trap in 4b below, which applies only to the older `:v4` image + `irodori_v4_venv` volume setup.
 
 Traps hit while setting this up, in the order they fired:
 
