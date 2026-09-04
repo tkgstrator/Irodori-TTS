@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import torch
@@ -163,7 +163,7 @@ def _build_lora_safetensors_metadata(  # noqa: PLR0913
         meta["epoch"] = str(int(step) // int(optim_steps_per_epoch))
     if val_loss is not None:
         meta["val_loss"] = f"{float(val_loss):.6f}"
-    meta["created_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    meta["created_at"] = datetime.now(UTC).isoformat(timespec="seconds")
     meta["lora_r"] = str(int(train_cfg.lora_r))
     meta["lora_alpha"] = str(int(train_cfg.lora_alpha))
     meta["lora_dropout"] = f"{float(train_cfg.lora_dropout):.6f}"

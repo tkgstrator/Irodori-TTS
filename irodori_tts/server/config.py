@@ -20,6 +20,17 @@ from irodori_tts.lora import (
 # drop .safetensors files into models/LoRA/ without assigning ids manually.
 _LORA_UUID_NAMESPACE = uuid_lib.UUID("8e6d8a0e-5a52-4a1e-8c8d-4c3e2f6a1b9f")
 
+# Upstream base checkpoints, keyed by the generation an adapter is trained
+# against. Naming them here means a config picks a generation instead of
+# restating a repo id, a filename and a local path that all have to agree.
+_BASE_VERSIONS = {
+    "v4.1-small": "Aratako/Irodori-TTS-v4.1-Small",
+    "v4-small": "Aratako/Irodori-TTS-v4-Small",
+    "v3": "Aratako/Irodori-TTS-500M-v3",
+    "v2": "Aratako/Irodori-TTS-500M-v2",
+    "v1": "Aratako/Irodori-TTS-500M",
+}
+
 logger = logging.getLogger("irodori_tts.server")
 
 
@@ -68,13 +79,16 @@ class ServerConfig:
 def _discover_lora_dir(lora_dir: Path) -> list[SpeakerSpec]:
     """Discover standalone .safetensors LoRA exports under ``lora_dir``.
 
+    The search is recursive, so adapters may be grouped into subdirectories
+    (the published set is laid out as ``<generation>/<category>/<speaker>``).
+
     Each file must carry Irodori-TTS metadata (``name``, ``uuid``,
     ``adapter_config``). ``defaults`` is optional.
     """
     if not lora_dir.is_dir():
         raise FileNotFoundError(f"lora_dir does not exist: {lora_dir}")
     specs: list[SpeakerSpec] = []
-    for entry in sorted(lora_dir.glob("*.safetensors")):
+    for entry in sorted(lora_dir.rglob("*.safetensors")):
         if not is_lora_safetensors_file(entry):
             logger.warning("skipping non-LoRA safetensors file: %s", entry)
             continue
@@ -112,6 +126,29 @@ def _discover_lora_dir(lora_dir: Path) -> list[SpeakerSpec]:
     return specs
 
 
+def _resolve_base_repo(raw: dict[str, Any]) -> str | None:
+    """Pick the base repo from ``base_version`` or an explicit ``base_hf_repo``.
+
+    Setting both is rejected rather than silently ranked: the pair disagreeing
+    is exactly the mistake the version alias exists to prevent.
+    """
+    version_raw = raw.get("base_version")
+    version = str(version_raw).strip() if version_raw else ""
+    explicit = str(raw["base_hf_repo"]) if raw.get("base_hf_repo") else None
+
+    if not version:
+        return explicit
+    if explicit:
+        raise ValueError(
+            f"Set either base_version or base_hf_repo, not both (got {version!r} and {explicit!r})."
+        )
+    try:
+        return _BASE_VERSIONS[version]
+    except KeyError:
+        known = ", ".join(sorted(_BASE_VERSIONS))
+        raise ValueError(f"Unknown base_version: {version!r}. Known versions: {known}") from None
+
+
 def load_config(path: Path) -> ServerConfig:
     with path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
@@ -143,7 +180,7 @@ def load_config(path: Path) -> ServerConfig:
 
     return ServerConfig(
         base_checkpoint=(str(raw["base_checkpoint"]) if raw.get("base_checkpoint") else None),
-        base_hf_repo=(str(raw["base_hf_repo"]) if raw.get("base_hf_repo") else None),
+        base_hf_repo=_resolve_base_repo(raw),
         base_hf_filename=str(raw.get("base_hf_filename", "model.safetensors")),
         model_device=str(raw.get("model_device", "cuda")),
         codec_device=str(raw.get("codec_device", "cuda")),

@@ -1,10 +1,14 @@
 # syntax=docker/dockerfile:1.7
 # Training image for Irodori-TTS LoRA fine-tuning.
 #
-# This image only ships system dependencies and the project source. The
-# Python virtual environment (.venv) and the base model checkpoint are
-# created at first container start by scripts/entrypoint.sh — keep
-# .venv on a named volume so subsequent runs reuse it.
+# Ships system dependencies and the project source. The entrypoint installs the
+# project into the container's system Python on start — no virtualenv, which
+# the container already makes redundant, and nothing under /app for a repo bind
+# mount to shadow or for a throwaway `uv run` on the same node to delete.
+# UV_PROJECT_ENVIRONMENT is /usr/local rather than /usr because uv requires a
+# bin/python in the environment it installs into, and Debian ships only
+# python3 there. Mount the uv cache (/root/.cache/uv) to keep the start fast:
+# the cache is content-addressed and safe to share, unlike an environment.
 #
 # Build (from repo root):
 #   docker build -f docker/train/Dockerfile -t irodori-tts-train .
@@ -15,6 +19,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     HF_HOME=/root/.cache/huggingface \
+    UV_PROJECT_ENVIRONMENT=/usr/local \
     BASE_MODEL_REPO=Aratako/Irodori-TTS-500M-v3 \
     BASE_CKPT=/app/models/Irodori-TTS-500M-v3/model.safetensors
 

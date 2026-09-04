@@ -144,6 +144,40 @@ class TestLoadConfigDefaults:
         assert cfg.show_timings is True
         assert cfg.speakers == []
 
+    def test_base_version_resolves_to_upstream_repo(self, tmp_path: Path):
+        cfg = load_config(write_config(tmp_path / "c.yaml", {"base_version": "v4.1-small"}))
+        assert cfg.base_hf_repo == "Aratako/Irodori-TTS-v4.1-Small"
+
+    def test_base_version_is_stripped(self, tmp_path: Path):
+        cfg = load_config(write_config(tmp_path / "c.yaml", {"base_version": "  v3  "}))
+        assert cfg.base_hf_repo == "Aratako/Irodori-TTS-500M-v3"
+
+    def test_unknown_base_version_raises(self, tmp_path: Path):
+        with pytest.raises(ValueError, match="Unknown base_version: 'v5'"):
+            load_config(write_config(tmp_path / "c.yaml", {"base_version": "v5"}))
+
+    def test_base_version_with_explicit_repo_raises(self, tmp_path: Path):
+        with pytest.raises(ValueError, match="not both"):
+            load_config(
+                write_config(
+                    tmp_path / "c.yaml",
+                    {"base_version": "v3", "base_hf_repo": "someone/fork"},
+                )
+            )
+
+    def test_explicit_repo_alone_is_kept(self, tmp_path: Path):
+        cfg = load_config(write_config(tmp_path / "c.yaml", {"base_hf_repo": "someone/fork"}))
+        assert cfg.base_hf_repo == "someone/fork"
+
+    def test_empty_base_version_falls_back_to_explicit_repo(self, tmp_path: Path):
+        cfg = load_config(
+            write_config(
+                tmp_path / "c.yaml",
+                {"base_version": "", "base_hf_repo": "someone/fork"},
+            )
+        )
+        assert cfg.base_hf_repo == "someone/fork"
+
     def test_scalars_are_coerced_to_declared_types(self, tmp_path: Path):
         cfg = load_config(
             write_config(
@@ -340,6 +374,18 @@ class TestDiscoverLoraDir:
         for stem in ("charlie", "alice", "bravo"):
             write_lora(tmp_path / f"{stem}.safetensors")
         assert [s.name for s in _discover_lora_dir(tmp_path)] == ["alice", "bravo", "charlie"]
+
+    def test_adapters_in_subdirectories_are_discovered(self, tmp_path: Path):
+        (tmp_path / "genshin_impact").mkdir()
+        (tmp_path / "wuthering_waves").mkdir()
+        write_lora(tmp_path / "genshin_impact" / "gi_paimon.safetensors")
+        write_lora(tmp_path / "wuthering_waves" / "wuwa_yangyang.safetensors")
+        write_lora(tmp_path / "loose.safetensors")
+        assert [s.name for s in _discover_lora_dir(tmp_path)] == [
+            "gi_paimon",
+            "loose",
+            "wuwa_yangyang",
+        ]
 
     def test_non_lora_safetensors_skipped(self, tmp_path: Path):
         save_file({"w": torch.zeros(2)}, str(tmp_path / "plain.safetensors"))

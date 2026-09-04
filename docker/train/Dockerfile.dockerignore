@@ -14,7 +14,10 @@ wandb
 *.log
 
 models
-outputs
+outputs*
+locks
+logs
+export
 
 .ruff_cache
 .mypy_cache
