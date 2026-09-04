@@ -68,13 +68,16 @@ class ServerConfig:
 def _discover_lora_dir(lora_dir: Path) -> list[SpeakerSpec]:
     """Discover standalone .safetensors LoRA exports under ``lora_dir``.
 
+    The search is recursive, so adapters may be grouped into subdirectories
+    (the published set is laid out as ``<generation>/<category>/<speaker>``).
+
     Each file must carry Irodori-TTS metadata (``name``, ``uuid``,
     ``adapter_config``). ``defaults`` is optional.
     """
     if not lora_dir.is_dir():
         raise FileNotFoundError(f"lora_dir does not exist: {lora_dir}")
     specs: list[SpeakerSpec] = []
-    for entry in sorted(lora_dir.glob("*.safetensors")):
+    for entry in sorted(lora_dir.rglob("*.safetensors")):
         if not is_lora_safetensors_file(entry):
             logger.warning("skipping non-LoRA safetensors file: %s", entry)
             continue

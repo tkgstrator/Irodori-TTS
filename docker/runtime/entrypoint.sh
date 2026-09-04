@@ -16,9 +16,6 @@ log() { printf '[entrypoint] %s\n' "$*"; }
 : "${TTS_HOST:=0.0.0.0}"
 : "${TTS_PORT:=8765}"
 
-log "uv sync (venv=/app/.venv)"
-uv sync --frozen --no-dev
-
 if [ ! -f "${TTS_CONFIG}" ]; then
   echo "ERROR: TTS_CONFIG not found: ${TTS_CONFIG}" >&2
   echo "Mount your server config at ${TTS_CONFIG} (e.g. -v ./configs/runtime.yaml:${TTS_CONFIG}:ro)" >&2

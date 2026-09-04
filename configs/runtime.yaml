@@ -20,8 +20,11 @@ codec_deterministic_decode: true
 # With a caption-incapable base and no override, caption speakers return 501.
 
 # LoRA adapters are auto-discovered as single-file .safetensors exports under
-# this directory. Each file carries its own metadata (name, uuid, defaults,
-# adapter_config) so no per-speaker block is required.
+# this directory, searched recursively, so the published layout
+# (<generation>/<category>/<speaker>.safetensors) can be downloaded as-is. Each
+# file carries its own metadata (name, uuid, defaults, adapter_config) so no
+# per-speaker block is required. Keep only one generation's adapters under this
+# directory: a v3 adapter loaded against the v4.1 base is a mismatch.
 #
 # To add a new speaker: export a PEFT checkpoint to a .safetensors file with
 #   uv run python scripts/lora/export_lora_to_safetensors.py \

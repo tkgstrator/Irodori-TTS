@@ -341,6 +341,18 @@ class TestDiscoverLoraDir:
             write_lora(tmp_path / f"{stem}.safetensors")
         assert [s.name for s in _discover_lora_dir(tmp_path)] == ["alice", "bravo", "charlie"]
 
+    def test_adapters_in_subdirectories_are_discovered(self, tmp_path: Path):
+        (tmp_path / "genshin_impact").mkdir()
+        (tmp_path / "wuthering_waves").mkdir()
+        write_lora(tmp_path / "genshin_impact" / "gi_paimon.safetensors")
+        write_lora(tmp_path / "wuthering_waves" / "wuwa_yangyang.safetensors")
+        write_lora(tmp_path / "loose.safetensors")
+        assert [s.name for s in _discover_lora_dir(tmp_path)] == [
+            "gi_paimon",
+            "loose",
+            "wuwa_yangyang",
+        ]
+
     def test_non_lora_safetensors_skipped(self, tmp_path: Path):
         save_file({"w": torch.zeros(2)}, str(tmp_path / "plain.safetensors"))
         write_lora(tmp_path / "alice.safetensors")
