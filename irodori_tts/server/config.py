@@ -74,6 +74,7 @@ class ServerConfig:
     tail_mean_threshold: float
     show_timings: bool
     lora_slots: int
+    preload_speaker: str | None
     speakers: list[SpeakerSpec]
 
 
@@ -200,6 +201,7 @@ def load_config(path: Path) -> ServerConfig:
         tail_mean_threshold=float(raw.get("tail_mean_threshold", 0.1)),
         show_timings=bool(raw.get("show_timings", True)),
         lora_slots=int(raw.get("lora_slots", 16)),
+        preload_speaker=(str(raw["preload_speaker"]) if raw.get("preload_speaker") else None),
         speakers=speakers,
     )
 

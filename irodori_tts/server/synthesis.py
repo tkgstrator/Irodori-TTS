@@ -214,6 +214,10 @@ def _synth_single(  # noqa: C901, PLR0915
     )
 
     sampling_req = SamplingRequest(
+        # The adapter registry.acquire() just activated must survive
+        # synthesize(): without keep_adapter, _prepare_lora_for_request()
+        # disables it and every speaker comes out as the base voice.
+        keep_adapter=True,
         text=text,
         caption=None,
         ref_wav=None,
@@ -394,6 +398,8 @@ def _synth_cue(  # noqa: C901, PLR0912, PLR0915
     )
 
     sampling_req = SamplingRequest(
+        # See _synth_single: the acquired adapter must survive synthesize().
+        keep_adapter=True,
         text=cue.text,
         caption=None,
         ref_wav=None,

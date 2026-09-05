@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 
 from irodori_tts.inference_runtime import InferenceRuntime, RuntimeKey
@@ -68,24 +69,65 @@ class RuntimeRegistry:
             compile_dynamic=False,
         )
 
+    def _resolve_slots(self, total: int) -> int:
+        """Resident budget: the env override first, then the config, 0 = all.
+
+        TTS_MAX_LOADED_ADAPTERS predates lora_slots (it came from a production
+        hot-patch) and deployments still set it; honoring it keeps them working.
+        """
+        raw = (os.environ.get("TTS_MAX_LOADED_ADAPTERS") or "").strip()
+        slots = int(self.cfg.lora_slots)
+        if raw:
+            try:
+                slots = int(raw)
+            except ValueError:
+                logger.warning(
+                    "invalid TTS_MAX_LOADED_ADAPTERS=%r — using lora_slots=%d", raw, slots
+                )
+        slots = max(0, slots)
+        return slots if slots and slots < total else 0
+
+    def _preload_spec(self) -> SpeakerSpec:
+        """Speaker loaded (and pinned) at startup — the configured one, else the first.
+
+        The pinned speaker is never evicted: a bot serves most requests with
+        its default voice, and evicting it only to reload it moments later
+        would make the common case pay for the rare one.
+        """
+        wanted = (
+            os.environ.get("TTS_PRELOAD_SPEAKER_ID") or self.cfg.preload_speaker or ""
+        ).strip()
+        if wanted:
+            spec = self._by_uuid.get(wanted)
+            if spec is not None:
+                return spec
+            logger.warning(
+                "preload speaker %s matches none of the %d discovered speakers "
+                "— preloading the first one instead",
+                wanted,
+                len(self.cfg.speakers),
+            )
+        return self.cfg.speakers[0]
+
     def load(self) -> None:
         if self.cfg.speakers:
             base_path = resolve_base_checkpoint(self.cfg)
             adapters = {s.uuid: s.adapter for s in self.cfg.speakers}
-            slots = max(0, int(self.cfg.lora_slots))
-            if slots and slots < len(adapters):
+            slots = self._resolve_slots(len(adapters))
+            preload = self._preload_spec()
+            if slots:
                 logger.info(
-                    "Loading base + %d LoRA adapters, %d resident at a time",
+                    "Loading base + 1 of %d LoRA adapters (%d resident at a time, pinned: %s)",
                     len(adapters),
                     slots,
+                    preload.name,
                 )
             else:
-                slots = 0
                 logger.info("Loading base + %d LoRA adapters", len(adapters))
             self._runtime = InferenceRuntime.from_base_with_adapters(
                 key=self._make_key(str(base_path)),
                 adapters=adapters,
-                default_adapter=self.cfg.speakers[0].uuid,
+                default_adapter=preload.uuid,
                 adapter_slots=slots,
             )
         else:

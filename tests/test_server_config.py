@@ -73,13 +73,17 @@ class FakeRuntime:
 
     def __init__(self, checkpoint: str, *, use_caption_condition: bool) -> None:
         self.checkpoint = checkpoint
-        self.model_cfg = SimpleNamespace(use_caption_condition=use_caption_condition)
+        self.model_cfg = SimpleNamespace(
+            use_caption_condition=use_caption_condition,
+            use_speaker_condition=True,
+        )
         self.codec = SimpleNamespace(sample_rate=48000)
 
     def set_active_adapter(self, name: str) -> None:
         self.active_adapter = name
 
-    def synthesize(self, _req: Any, **_kwargs: Any) -> SimpleNamespace:
+    def synthesize(self, req: Any, **_kwargs: Any) -> SimpleNamespace:
+        self.last_request = req
         return SimpleNamespace(audio=torch.zeros(1, 4800), sample_rate=48000, used_seed=7)
 
 
@@ -1115,6 +1119,51 @@ class TestCaptionCapableBaseRoutes:
         )
         assert response.status_code == 200
         assert response.headers["X-TTS-Cue-Count"] == "1"
+
+
+class TestAdapterSurvivesSynthesis:
+    """The adapter acquire() activates must not be disabled inside synthesize().
+
+    SamplingRequest defaults to keep_adapter=False, under which
+    _prepare_lora_for_request() calls disable_adapter() and every LoRA speaker
+    comes out as the base voice. The server paths must opt out; the caption
+    path must not, or a leftover speaker adapter would color caption output.
+    """
+
+    @pytest.fixture
+    def runtimes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[TestClient, dict[str, FakeRuntime]]:
+        made: dict[str, FakeRuntime] = {}
+
+        def from_base_with_adapters(
+            *, key: Any, adapters: Any, default_adapter: Any, adapter_slots: int = 0
+        ) -> FakeRuntime:
+            del adapters, default_adapter, adapter_slots
+            made["base"] = FakeRuntime(key.checkpoint, use_caption_condition=True)
+            return made["base"]
+
+        monkeypatch.setattr(
+            registry_module.InferenceRuntime, "from_base_with_adapters", from_base_with_adapters
+        )
+        client = TestClient(build_app(caption_test_config(tmp_path), eager_load=True))
+        return client, made
+
+    def test_lora_synthesis_keeps_the_acquired_adapter(
+        self, runtimes: tuple[TestClient, dict[str, FakeRuntime]]
+    ):
+        client, made = runtimes
+        response = client.post("/synth", json={"text": "hi", "speaker_id": UUID_A})
+        assert response.status_code == 200
+        assert made["base"].last_request.keep_adapter is True
+
+    def test_caption_synthesis_does_not_keep_a_speaker_adapter(
+        self, runtimes: tuple[TestClient, dict[str, FakeRuntime]]
+    ):
+        client, made = runtimes
+        response = client.post("/synth", json={"text": "hi", "caption": "やわらかい声"})
+        assert response.status_code == 200
+        assert made["base"].last_request.keep_adapter is False
 
 
 class TestOpenApiContract:
