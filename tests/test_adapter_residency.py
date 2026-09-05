@@ -89,6 +89,26 @@ class TestAdapterResidency:
         with pytest.raises(ValueError, match="must not be negative"):
             AdapterResidency({"a": "/a"}, slots=-1, resident=["a"])
 
+    def test_pinned_adapter_is_never_evicted(self):
+        rec = Recorder()
+        paths = {n: f"/adapters/{n}.safetensors" for n in ["a", "b", "c", "d"]}
+        r = AdapterResidency(paths, slots=2, resident=["a"], pinned="a")
+        r.ensure("b", load=rec.load, evict=rec.evict)
+        r.ensure("c", load=rec.load, evict=rec.evict)
+        r.ensure("d", load=rec.load, evict=rec.evict)
+        assert rec.evicted == ["b", "c"]
+        assert "a" in r.resident
+
+    def test_only_pinned_resident_loads_beyond_the_budget(self):
+        rec = Recorder()
+        paths = {n: f"/adapters/{n}.safetensors" for n in ["a", "b"]}
+        r = AdapterResidency(paths, slots=1, resident=["a"], pinned="a")
+        r.ensure("b", load=rec.load, evict=rec.evict)
+        # The cap cannot be honored without evicting the pin, so the request
+        # wins and the set runs one over.
+        assert rec.evicted == []
+        assert r.resident == ["a", "b"]
+
     def test_preloaded_set_beyond_the_budget_drains_to_it(self):
         # A runtime handed more resident adapters than slots (a shrunk budget
         # on reload) evicts down rather than growing past the cap.

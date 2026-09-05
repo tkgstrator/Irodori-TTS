@@ -44,4 +44,11 @@ lora_dir: models/LoRA
 # the rest load on request and the least recently used one is evicted. Raise it
 # if the card has room — a warm adapter answers without paying the load. Set 0
 # to keep every adapter loaded, which only suits a small speaker set.
+# TTS_MAX_LOADED_ADAPTERS in the environment overrides this (kept for
+# deployments that predate the config key).
 lora_slots: 16
+
+# Speaker uuid loaded at startup and never evicted — point it at the bot's
+# default voice so the common case never pays a reload. Unset picks the first
+# discovered speaker. TTS_PRELOAD_SPEAKER_ID in the environment overrides it.
+# preload_speaker: c3a337b8-6df0-5e7e-9fad-adf44666543c
