@@ -330,15 +330,13 @@ class TestResolveLoraDisplayName:
 
 
 class TestDiscoverLoraDir:
-    def test_missing_dir_raises(self, tmp_path: Path):
-        with pytest.raises(FileNotFoundError, match="lora_dir does not exist"):
-            _discover_lora_dir(tmp_path / "absent")
+    def test_missing_dir_is_empty(self, tmp_path: Path):
+        assert _discover_lora_dir(tmp_path / "absent") == []
 
-    def test_file_instead_of_dir_raises(self, tmp_path: Path):
+    def test_file_instead_of_dir_is_empty(self, tmp_path: Path):
         path = tmp_path / "not_a_dir"
         path.write_text("x", encoding="utf-8")
-        with pytest.raises(FileNotFoundError, match="lora_dir does not exist"):
-            _discover_lora_dir(path)
+        assert _discover_lora_dir(path) == []
 
     def test_empty_dir(self, tmp_path: Path):
         assert _discover_lora_dir(tmp_path) == []
@@ -479,10 +477,9 @@ class TestLoadConfigLoraDir:
         cfg = load_config(write_config(tmp_path / "c.yaml", {"lora_dir": ""}))
         assert cfg.speakers == []
 
-    def test_missing_lora_dir_propagates(self, tmp_path: Path):
+    def test_missing_lora_dir_yields_no_speakers(self, tmp_path: Path):
         path = write_config(tmp_path / "c.yaml", {"lora_dir": str(tmp_path / "absent")})
-        with pytest.raises(FileNotFoundError, match="lora_dir does not exist"):
-            load_config(path)
+        assert load_config(path).speakers == []
 
 
 # ===================================================================
@@ -573,6 +570,38 @@ class TestCaptionRuntimeSelection:
         assert registry.caption_available is False
         with pytest.raises(RuntimeError, match="Caption runtime not configured"):
             registry.acquire_caption()
+
+    def test_base_serves_captions_with_no_lora_at_all(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        calls = install_fake_runtimes(monkeypatch, base_caption=True)
+        ckpt = tmp_path / "base.safetensors"
+        ckpt.write_text("x", encoding="utf-8")
+        path = write_config(tmp_path / "c.yaml", {"base_checkpoint": str(ckpt)})
+        registry = RuntimeRegistry(load_config(path))
+        registry.load()
+        assert registry.caption_available is True
+        assert calls["base"] == []
+        assert calls["caption"] == [str(ckpt)]
+        with pytest.raises(KeyError):
+            registry.acquire(UUID_A)
+
+    def test_sidecar_caption_checkpoint_is_loaded_once_with_no_lora(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        calls = install_fake_runtimes(monkeypatch, base_caption=True)
+        ckpt = tmp_path / "base.safetensors"
+        ckpt.write_text("x", encoding="utf-8")
+        caption_ckpt = tmp_path / "voicedesign.safetensors"
+        caption_ckpt.write_text("x", encoding="utf-8")
+        path = write_config(
+            tmp_path / "c.yaml",
+            {"base_checkpoint": str(ckpt), "caption_checkpoint": str(caption_ckpt)},
+        )
+        registry = RuntimeRegistry(load_config(path))
+        registry.load()
+        assert registry.caption_available is True
+        assert calls["caption"] == [str(caption_ckpt)]
 
     def test_unloaded_registry_has_no_caption(self, tmp_path: Path):
         registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))

@@ -7,7 +7,7 @@
 ## 1. 全体像
 
 - **ベースモデル（LoRA）**: `configs/runtime.yaml` の `base_checkpoint`（ローカルに無ければ `base_hf_repo` から HF に取りに行きます）を 1 回だけ読み込み。
-- **話者アダプタ**: `lora_dir`（既定 `models/LoRA/`）配下の `.safetensors` を起動時にスキャンし、それぞれに埋め込まれた metadata (`name` / `uuid` / `defaults` / `adapter_config`) から話者を自動登録します。YAML 側に話者ブロックを書く必要はありません。
+- **話者アダプタ**: `lora_dir`（既定 `models/LoRA/`）配下の `.safetensors` を起動時にスキャンし、それぞれに埋め込まれた metadata (`name` / `uuid` / `defaults` / `adapter_config`) から話者を自動登録します。YAML 側に話者ブロックを書く必要はありません。ディレクトリが無い / 空でも起動は止まらず、話者 0 体の caption 専用サーバとして立ち上がります（`/synth` の `speaker_id` は 404）。
 - **VoiceDesign（caption）**: ベースモデルが caption 条件付けに対応していれば（v4 系）、そのまま caption 合成に使われます。第 2 ランタイムはロードされず、同じ重みを二重に載せることもありません。v2 / v3 系の caption 非対応ベースを使う場合のみ、`caption_checkpoint`（または `caption_hf_repo`）で別建ての VoiceDesign チェックポイントを並載します。どちらも無い場合、caption 指定は 501 を返します。
 - **推論**: `/synth` にテキストと `speaker_id` (= 話者 UUID) または `caption`（自然文記述）を POST すると、WAV が返ります。
 

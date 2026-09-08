@@ -130,8 +130,13 @@ class RuntimeRegistry:
                 default_adapter=preload.uuid,
                 adapter_slots=slots,
             )
-        else:
-            logger.warning("No LoRA speakers configured — LoRA synthesis disabled")
+        elif not (self.cfg.caption_checkpoint or self.cfg.caption_hf_repo):
+            # No adapters to attach, but a v4 base carries caption conditioning
+            # on its own, so load it plainly and keep VoiceDesign served.
+            logger.warning("No LoRA speakers configured — loading the base for caption only")
+            self._runtime = InferenceRuntime.from_key(
+                self._make_key(str(resolve_base_checkpoint(self.cfg)))
+            )
 
         if self.cfg.caption_checkpoint or self.cfg.caption_hf_repo:
             caption_path = _resolve_checkpoint(

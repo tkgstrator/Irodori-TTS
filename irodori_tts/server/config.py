@@ -88,7 +88,8 @@ def _discover_lora_dir(lora_dir: Path) -> list[SpeakerSpec]:
     ``adapter_config``). ``defaults`` is optional.
     """
     if not lora_dir.is_dir():
-        raise FileNotFoundError(f"lora_dir does not exist: {lora_dir}")
+        logger.warning("lora_dir does not exist, serving without LoRA speakers: %s", lora_dir)
+        return []
     specs: list[SpeakerSpec] = []
     for entry in sorted(lora_dir.rglob("*.safetensors")):
         if not is_lora_safetensors_file(entry):
