@@ -78,6 +78,7 @@ class FakeRuntime:
             use_speaker_condition=True,
         )
         self.codec = SimpleNamespace(sample_rate=48000)
+        self.watermarker = SimpleNamespace(model=object())
 
     def set_active_adapter(self, name: str) -> None:
         self.active_adapter = name
@@ -602,6 +603,30 @@ class TestCaptionRuntimeSelection:
         registry.load()
         assert registry.caption_available is True
         assert calls["caption"] == [str(caption_ckpt)]
+
+    def test_watermarking_is_left_on_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        install_fake_runtimes(monkeypatch, base_caption=True)
+        registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))
+        registry.load()
+        base, _ = registry.acquire(UUID_A)
+        assert base.watermarker.model is not None
+
+    def test_disabling_the_watermark_drops_the_backend_from_every_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        install_fake_runtimes(monkeypatch, base_caption=False)
+        path = caption_test_config(
+            tmp_path,
+            enable_watermark=False,
+            caption_hf_repo="Aratako/Irodori-TTS-500M-v2-VoiceDesign",
+        )
+        registry = RuntimeRegistry(load_config(path))
+        registry.load()
+        base, _ = registry.acquire(UUID_A)
+        assert base.watermarker.model is None
+        assert registry.acquire_caption().watermarker.model is None
 
     def test_unloaded_registry_has_no_caption(self, tmp_path: Path):
         registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))

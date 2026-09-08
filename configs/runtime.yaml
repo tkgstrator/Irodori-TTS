@@ -16,6 +16,10 @@ codec_repo: Aratako/Semantic-DACVAE-Japanese-32dim
 codec_deterministic_encode: true
 codec_deterministic_decode: true
 
+# SilentCipher watermarking. The runtime applies it whenever the package loads,
+# so this is the only way to turn it off; unset means on.
+enable_watermark: false
+
 # VoiceDesign (caption) conditioning is part of the unified v4.1 base above, so
 # no second runtime is loaded and caption speakers work out of the box.
 # caption_checkpoint / caption_hf_repo remain as an override: set them to load a

@@ -150,6 +150,14 @@ class RuntimeRegistry:
         elif self._base_caption_runtime() is not None:
             logger.info("Caption conditioning served by the base checkpoint")
 
+        if not self.cfg.enable_watermark:
+            # The runtime watermarks whenever the SilentCipher backend loaded, with
+            # no flag of its own, so dropping the backend is how the server opts out.
+            logger.info("Watermarking disabled by config")
+            for rt in (self._runtime, self._caption_runtime):
+                if rt is not None:
+                    rt.watermarker.model = None
+
     def acquire(self, uuid: str) -> tuple[InferenceRuntime, SpeakerSpec]:
         spec = self.get_spec(uuid)
         if self._runtime is None:

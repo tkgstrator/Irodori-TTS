@@ -69,6 +69,7 @@ class ServerConfig:
     caption_checkpoint: str | None
     caption_hf_repo: str | None
     caption_hf_filename: str
+    enable_watermark: bool
     tail_window_size: int
     tail_std_threshold: float
     tail_mean_threshold: float
@@ -197,6 +198,7 @@ def load_config(path: Path) -> ServerConfig:
         ),
         caption_hf_repo=(str(raw["caption_hf_repo"]) if raw.get("caption_hf_repo") else None),
         caption_hf_filename=str(raw.get("caption_hf_filename", "model.safetensors")),
+        enable_watermark=bool(raw.get("enable_watermark", True)),
         tail_window_size=int(raw.get("tail_window_size", 20)),
         tail_std_threshold=float(raw.get("tail_std_threshold", 0.05)),
         tail_mean_threshold=float(raw.get("tail_mean_threshold", 0.1)),
