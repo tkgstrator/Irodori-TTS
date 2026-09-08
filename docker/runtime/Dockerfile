@@ -5,9 +5,19 @@
 # The entrypoint installs the project into the container's system Python
 # on start — no virtualenv, which the container already makes redundant, and
 # nothing for a bind mount to shadow or for a throwaway `uv run` on the same
-# host to delete mid-serve. UV_PROJECT_ENVIRONMENT is /usr/local rather than
-# /usr because uv requires a bin/python in the target environment and Debian
-# ships only python3 there. Mount the uv cache (/root/.cache/uv) for speed.
+# host to delete mid-serve. UV_PROJECT_ENVIRONMENT is /usr/local because that
+# is where the python image keeps its interpreter. Mount the uv cache
+# (/root/.cache/uv) for speed.
+#
+# The base is a plain Python image, not nvidia/cuda: `uv sync` resolves torch
+# from PyPI, whose linux wheels depend on the nvidia-*-cu12 packages and so
+# carry their own CUDA runtime and cuDNN. A CUDA base image would ship a
+# second copy of both (~4.4 GB) that nothing loads. The driver still comes
+# from the host through --gpus all / the compose device reservation.
+#
+# git stays because two dependencies (dacvae, silentcipher) are git URLs that
+# uv clones at sync time; ffmpeg stays because torchcodec dlopens libav* to
+# write WAV.
 #
 # Everything else is supplied by the user via bind mounts:
 #   - /app/config.yaml              (server config YAML)
@@ -21,7 +31,7 @@
 #     -v tts_models:/app/models \
 #     -v tts_hf_cache:/root/.cache/huggingface \
 #     ghcr.io/tkgstrator/irodori-tts
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -38,18 +48,8 @@ RUN \
   --mount=type=cache,target=/var/cache/apt,sharing=locked \
   apt-get update && \
   apt-get install -y --no-install-recommends \
-    python3.12 \
-    python3.12-venv \
-    python3.12-dev \
     ffmpeg \
-    ca-certificates \
-    curl \
-    git \
-    build-essential \
-    cmake \
-    pkg-config && \
-  ln -sf /usr/bin/python3.12 /usr/local/bin/python3 && \
-  ln -sf /usr/bin/python3.12 /usr/local/bin/python
+    git
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 

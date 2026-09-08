@@ -126,7 +126,7 @@ uv run python server.py \
 
 ## 5. Docker での起動
 
-`docker/runtime/Dockerfile` が最小イメージを作ります。`.venv` は起動時に `uv sync` でマウント先 volume に展開するので、イメージ自体は薄いままです。
+`docker/runtime/Dockerfile` が最小イメージを作ります。依存は起動時に `uv sync` でコンテナの system Python (`/usr/local`) へ入れるので、イメージ自体は薄いままです。ベースは `nvidia/cuda` ではなく `python:3.12-slim` です。PyPI の torch wheel が `nvidia-*-cu12` として CUDA ランタイムと cuDNN を持ってくるため、CUDA ベースイメージを敷くと同じ物が二重に載ります（約 4.4GB）。ドライバはこれまで通り `--gpus all` / compose の device reservation でホストから来ます。
 
 ### ビルド
 
@@ -142,7 +142,7 @@ docker compose -f docker/runtime/compose.yaml logs -f    # ログ追跡
 
 ボリュームの要点:
 
-- **`tts_venv`**: 初回に `uv sync --frozen --no-dev` で構築。2 回目以降は数秒で起動。
+- **`uv_cache`**: 初回の `uv sync --frozen --no-dev` で落とした wheel を保持。2 回目以降の起動が数秒で済みます。
 - **`hf_cache`**: DACVAE codec / tokenizer などの HF hub キャッシュを永続化。
 - **`../../models`**: ベースモデル (`model.safetensors`) と LoRA 話者 `.safetensors` を置く場所。未マウント / ベースモデル未配置なら `base_hf_repo` から取りに行きます。LoRA は `models/LoRA/` 配下に置いてください。新しい LoRA を追加したら**コンテナの再起動が必要**（起動時にだけスキャンするため）。
 
