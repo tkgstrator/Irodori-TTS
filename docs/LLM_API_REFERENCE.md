@@ -139,7 +139,7 @@
   "text": "こんにちは、今日はいい天気ですね。",
   "num_steps": 40,
   "cfg_scale_text": 3.0,
-  "cfg_scale_caption": 3.0
+  "cfg_scale_caption": 4.0
 }
 ```
 
@@ -147,7 +147,7 @@
 |------------|----|------|------|
 | `caption` | `string` | **必須** | 自然文による話者記述 |
 | `text` | `string` | **必須** | 合成するテキスト |
-| `cfg_scale_caption` | `float` | 任意 | caption CFG スケール（デフォルト `3.0`） |
+| `cfg_scale_caption` | `float` | 任意 | caption CFG スケール（デフォルト `4.0`） |
 | `seed` / `num_steps` / `cfg_scale_text` / `truncation_factor` | — | 任意 | LoRA モードと同じ |
 | `seconds` / `min_seconds` / `max_seconds` / `duration_scale` | `float` | 任意 | LoRA モードと同じ duration 制御 |
 

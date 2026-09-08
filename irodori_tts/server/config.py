@@ -69,11 +69,13 @@ class ServerConfig:
     caption_checkpoint: str | None
     caption_hf_repo: str | None
     caption_hf_filename: str
+    enable_watermark: bool
     tail_window_size: int
     tail_std_threshold: float
     tail_mean_threshold: float
     show_timings: bool
     lora_slots: int
+    preload_speaker: str | None
     speakers: list[SpeakerSpec]
 
 
@@ -87,7 +89,8 @@ def _discover_lora_dir(lora_dir: Path) -> list[SpeakerSpec]:
     ``adapter_config``). ``defaults`` is optional.
     """
     if not lora_dir.is_dir():
-        raise FileNotFoundError(f"lora_dir does not exist: {lora_dir}")
+        logger.warning("lora_dir does not exist, serving without LoRA speakers: %s", lora_dir)
+        return []
     specs: list[SpeakerSpec] = []
     for entry in sorted(lora_dir.rglob("*.safetensors")):
         if not is_lora_safetensors_file(entry):
@@ -195,11 +198,13 @@ def load_config(path: Path) -> ServerConfig:
         ),
         caption_hf_repo=(str(raw["caption_hf_repo"]) if raw.get("caption_hf_repo") else None),
         caption_hf_filename=str(raw.get("caption_hf_filename", "model.safetensors")),
+        enable_watermark=bool(raw.get("enable_watermark", True)),
         tail_window_size=int(raw.get("tail_window_size", 20)),
         tail_std_threshold=float(raw.get("tail_std_threshold", 0.05)),
         tail_mean_threshold=float(raw.get("tail_mean_threshold", 0.1)),
         show_timings=bool(raw.get("show_timings", True)),
         lora_slots=int(raw.get("lora_slots", 16)),
+        preload_speaker=(str(raw["preload_speaker"]) if raw.get("preload_speaker") else None),
         speakers=speakers,
     )
 

@@ -4,8 +4,9 @@
 base_version: v4.1-small
 # base_hf_repo / base_hf_filename override the alias for a fork or a renamed
 # weight file; base_hf_repo and base_version are mutually exclusive.
-# base_checkpoint points at an already-downloaded file and skips the fetch.
-# base_checkpoint: models/Irodori-TTS-v4.1-Small/model.safetensors
+# base_checkpoint points at an already-downloaded file and skips the fetch; it
+# falls back to the repo above when the file is absent.
+base_checkpoint: models/Irodori-TTS-v4.1-Small/model.safetensors
 
 model_device: cuda
 codec_device: cuda
@@ -14,6 +15,10 @@ codec_precision: bf16
 codec_repo: Aratako/Semantic-DACVAE-Japanese-32dim
 codec_deterministic_encode: true
 codec_deterministic_decode: true
+
+# SilentCipher watermarking. The runtime applies it whenever the package loads,
+# so this is the only way to turn it off; unset means on.
+enable_watermark: false
 
 # VoiceDesign (caption) conditioning is part of the unified v4.1 base above, so
 # no second runtime is loaded and caption speakers work out of the box.
@@ -44,4 +49,11 @@ lora_dir: models/LoRA
 # the rest load on request and the least recently used one is evicted. Raise it
 # if the card has room — a warm adapter answers without paying the load. Set 0
 # to keep every adapter loaded, which only suits a small speaker set.
+# TTS_MAX_LOADED_ADAPTERS in the environment overrides this (kept for
+# deployments that predate the config key).
 lora_slots: 16
+
+# Speaker uuid loaded at startup and never evicted — point it at the bot's
+# default voice so the common case never pays a reload. Unset picks the first
+# discovered speaker. TTS_PRELOAD_SPEAKER_ID in the environment overrides it.
+# preload_speaker: c3a337b8-6df0-5e7e-9fad-adf44666543c
