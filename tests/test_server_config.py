@@ -73,13 +73,18 @@ class FakeRuntime:
 
     def __init__(self, checkpoint: str, *, use_caption_condition: bool) -> None:
         self.checkpoint = checkpoint
-        self.model_cfg = SimpleNamespace(use_caption_condition=use_caption_condition)
+        self.model_cfg = SimpleNamespace(
+            use_caption_condition=use_caption_condition,
+            use_speaker_condition=True,
+        )
         self.codec = SimpleNamespace(sample_rate=48000)
+        self.watermarker = SimpleNamespace(model=object())
 
     def set_active_adapter(self, name: str) -> None:
         self.active_adapter = name
 
-    def synthesize(self, _req: Any, **_kwargs: Any) -> SimpleNamespace:
+    def synthesize(self, req: Any, **_kwargs: Any) -> SimpleNamespace:
+        self.last_request = req
         return SimpleNamespace(audio=torch.zeros(1, 4800), sample_rate=48000, used_seed=7)
 
 
@@ -326,15 +331,13 @@ class TestResolveLoraDisplayName:
 
 
 class TestDiscoverLoraDir:
-    def test_missing_dir_raises(self, tmp_path: Path):
-        with pytest.raises(FileNotFoundError, match="lora_dir does not exist"):
-            _discover_lora_dir(tmp_path / "absent")
+    def test_missing_dir_is_empty(self, tmp_path: Path):
+        assert _discover_lora_dir(tmp_path / "absent") == []
 
-    def test_file_instead_of_dir_raises(self, tmp_path: Path):
+    def test_file_instead_of_dir_is_empty(self, tmp_path: Path):
         path = tmp_path / "not_a_dir"
         path.write_text("x", encoding="utf-8")
-        with pytest.raises(FileNotFoundError, match="lora_dir does not exist"):
-            _discover_lora_dir(path)
+        assert _discover_lora_dir(path) == []
 
     def test_empty_dir(self, tmp_path: Path):
         assert _discover_lora_dir(tmp_path) == []
@@ -475,10 +478,9 @@ class TestLoadConfigLoraDir:
         cfg = load_config(write_config(tmp_path / "c.yaml", {"lora_dir": ""}))
         assert cfg.speakers == []
 
-    def test_missing_lora_dir_propagates(self, tmp_path: Path):
+    def test_missing_lora_dir_yields_no_speakers(self, tmp_path: Path):
         path = write_config(tmp_path / "c.yaml", {"lora_dir": str(tmp_path / "absent")})
-        with pytest.raises(FileNotFoundError, match="lora_dir does not exist"):
-            load_config(path)
+        assert load_config(path).speakers == []
 
 
 # ===================================================================
@@ -569,6 +571,62 @@ class TestCaptionRuntimeSelection:
         assert registry.caption_available is False
         with pytest.raises(RuntimeError, match="Caption runtime not configured"):
             registry.acquire_caption()
+
+    def test_base_serves_captions_with_no_lora_at_all(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        calls = install_fake_runtimes(monkeypatch, base_caption=True)
+        ckpt = tmp_path / "base.safetensors"
+        ckpt.write_text("x", encoding="utf-8")
+        path = write_config(tmp_path / "c.yaml", {"base_checkpoint": str(ckpt)})
+        registry = RuntimeRegistry(load_config(path))
+        registry.load()
+        assert registry.caption_available is True
+        assert calls["base"] == []
+        assert calls["caption"] == [str(ckpt)]
+        with pytest.raises(KeyError):
+            registry.acquire(UUID_A)
+
+    def test_sidecar_caption_checkpoint_is_loaded_once_with_no_lora(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        calls = install_fake_runtimes(monkeypatch, base_caption=True)
+        ckpt = tmp_path / "base.safetensors"
+        ckpt.write_text("x", encoding="utf-8")
+        caption_ckpt = tmp_path / "voicedesign.safetensors"
+        caption_ckpt.write_text("x", encoding="utf-8")
+        path = write_config(
+            tmp_path / "c.yaml",
+            {"base_checkpoint": str(ckpt), "caption_checkpoint": str(caption_ckpt)},
+        )
+        registry = RuntimeRegistry(load_config(path))
+        registry.load()
+        assert registry.caption_available is True
+        assert calls["caption"] == [str(caption_ckpt)]
+
+    def test_watermarking_is_left_on_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        install_fake_runtimes(monkeypatch, base_caption=True)
+        registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))
+        registry.load()
+        base, _ = registry.acquire(UUID_A)
+        assert base.watermarker.model is not None
+
+    def test_disabling_the_watermark_drops_the_backend_from_every_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        install_fake_runtimes(monkeypatch, base_caption=False)
+        path = caption_test_config(
+            tmp_path,
+            enable_watermark=False,
+            caption_hf_repo="Aratako/Irodori-TTS-500M-v2-VoiceDesign",
+        )
+        registry = RuntimeRegistry(load_config(path))
+        registry.load()
+        base, _ = registry.acquire(UUID_A)
+        assert base.watermarker.model is None
+        assert registry.acquire_caption().watermarker.model is None
 
     def test_unloaded_registry_has_no_caption(self, tmp_path: Path):
         registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))
@@ -1115,6 +1173,51 @@ class TestCaptionCapableBaseRoutes:
         )
         assert response.status_code == 200
         assert response.headers["X-TTS-Cue-Count"] == "1"
+
+
+class TestAdapterSurvivesSynthesis:
+    """The adapter acquire() activates must not be disabled inside synthesize().
+
+    SamplingRequest defaults to keep_adapter=False, under which
+    _prepare_lora_for_request() calls disable_adapter() and every LoRA speaker
+    comes out as the base voice. The server paths must opt out; the caption
+    path must not, or a leftover speaker adapter would color caption output.
+    """
+
+    @pytest.fixture
+    def runtimes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[TestClient, dict[str, FakeRuntime]]:
+        made: dict[str, FakeRuntime] = {}
+
+        def from_base_with_adapters(
+            *, key: Any, adapters: Any, default_adapter: Any, adapter_slots: int = 0
+        ) -> FakeRuntime:
+            del adapters, default_adapter, adapter_slots
+            made["base"] = FakeRuntime(key.checkpoint, use_caption_condition=True)
+            return made["base"]
+
+        monkeypatch.setattr(
+            registry_module.InferenceRuntime, "from_base_with_adapters", from_base_with_adapters
+        )
+        client = TestClient(build_app(caption_test_config(tmp_path), eager_load=True))
+        return client, made
+
+    def test_lora_synthesis_keeps_the_acquired_adapter(
+        self, runtimes: tuple[TestClient, dict[str, FakeRuntime]]
+    ):
+        client, made = runtimes
+        response = client.post("/synth", json={"text": "hi", "speaker_id": UUID_A})
+        assert response.status_code == 200
+        assert made["base"].last_request.keep_adapter is True
+
+    def test_caption_synthesis_does_not_keep_a_speaker_adapter(
+        self, runtimes: tuple[TestClient, dict[str, FakeRuntime]]
+    ):
+        client, made = runtimes
+        response = client.post("/synth", json={"text": "hi", "caption": "やわらかい声"})
+        assert response.status_code == 200
+        assert made["base"].last_request.keep_adapter is False
 
 
 class TestOpenApiContract:

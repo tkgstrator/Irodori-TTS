@@ -179,7 +179,7 @@ class SynthRequest(BaseModel):
         examples=["落ち着いた女性の声で、やわらかく自然に"],
     )
     cfg_scale_caption: float | None = Field(
-        default=None, description="Caption CFG scale (VoiceDesign mode). Default 3.0."
+        default=None, description="Caption CFG scale (VoiceDesign mode). Default 4.0."
     )
     speaker_kv_scale: float | None = Field(
         default=None,

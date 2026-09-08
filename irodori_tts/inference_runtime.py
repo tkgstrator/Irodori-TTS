@@ -6,10 +6,11 @@ import json
 import logging
 import math
 import secrets
+import shutil
 import threading
 import time
-from collections.abc import Callable
-from contextlib import nullcontext
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -160,12 +161,20 @@ def _coerce_latent_shape(latent: torch.Tensor, latent_dim: int) -> torch.Tensor:
     )
 
 
-def _resolve_adapter_source(adapter_path: str | Path) -> str:
-    """Path peft can load: a single-file export is unpacked to a directory first."""
+@contextmanager
+def _adapter_source(adapter_path: str | Path) -> Iterator[str]:
+    """Path peft can load. A single-file export is unpacked into a temp
+    directory for the duration of the block — at ~105 MB per unpack, leaking
+    one per load fills the disk."""
     resolved = Path(adapter_path)
-    if is_lora_safetensors_file(resolved):
-        resolved = unpack_lora_safetensors(resolved)
-    return str(resolved)
+    if not is_lora_safetensors_file(resolved):
+        yield str(resolved)
+        return
+    staging = unpack_lora_safetensors(resolved)
+    try:
+        yield str(staging)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def find_flattening_point(
@@ -878,22 +887,24 @@ class InferenceRuntime:
         # The active adapter has to be the one PeftModel is constructed with,
         # since that call is what turns the base model into a PeftModel.
         first_name, first_path = next((n, p) for n, p in items if n == active)
-        peft_model = PeftModel.from_pretrained(
-            base_model,
-            _resolve_adapter_source(first_path),
-            adapter_name=first_name,
-            is_trainable=False,
-        )
+        with _adapter_source(first_path) as source:
+            peft_model = PeftModel.from_pretrained(
+                base_model,
+                source,
+                adapter_name=first_name,
+                is_trainable=False,
+            )
         resident: list[str] = [first_name]
         # With a slot budget, the rest load on demand in set_active_adapter;
         # a full speaker set does not fit in VRAM alongside the base model.
         preload = [] if adapter_slots else [(n, p) for n, p in items if n != first_name]
         for name, adapter_path in preload:
-            peft_model.load_adapter(
-                _resolve_adapter_source(adapter_path),
-                adapter_name=name,
-                is_trainable=False,
-            )
+            with _adapter_source(adapter_path) as source:
+                peft_model.load_adapter(
+                    source,
+                    adapter_name=name,
+                    is_trainable=False,
+                )
             resident.append(name)
         peft_model = peft_model.to(device=model_device, dtype=model_dtype)
         peft_model.eval()
@@ -955,7 +966,10 @@ class InferenceRuntime:
         )
         if adapter_slots:
             runtime._adapters = AdapterResidency(
-                dict(items), slots=adapter_slots, resident=resident
+                dict(items),
+                slots=adapter_slots,
+                resident=resident,
+                pinned=active,
             )
         return runtime
 
@@ -973,20 +987,27 @@ class InferenceRuntime:
 
     def _load_adapter(self, name: str, path: str) -> None:
         logger.info("loading LoRA adapter: %s", name)
-        self.model.load_adapter(
-            _resolve_adapter_source(path),
-            adapter_name=name,
-            is_trainable=False,
-        )
+        with _adapter_source(path) as source:
+            self.model.load_adapter(
+                source,
+                adapter_name=name,
+                is_trainable=False,
+                torch_device=str(self.model_device),
+            )
+        # Adapters are stored as f32; match the runtime precision the way the
+        # startup adapter is matched in from_base_with_adapters.
         self.model = _move_inference_module(
             self.model,
             device=self.model_device,
             dtype=self._model_dtype,
         )
+        self.model.eval()
 
     def _evict_adapter(self, name: str) -> None:
         logger.info("evicting LoRA adapter: %s", name)
         self.model.delete_adapter(name)
+        if self.model_device.type == "cuda":
+            torch.cuda.empty_cache()
 
     @property
     def resident_adapters(self) -> list[str]:

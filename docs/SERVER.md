@@ -7,7 +7,7 @@
 ## 1. 全体像
 
 - **ベースモデル（LoRA）**: `configs/runtime.yaml` の `base_checkpoint`（ローカルに無ければ `base_hf_repo` から HF に取りに行きます）を 1 回だけ読み込み。
-- **話者アダプタ**: `lora_dir`（既定 `models/LoRA/`）配下の `.safetensors` を起動時にスキャンし、それぞれに埋め込まれた metadata (`name` / `uuid` / `defaults` / `adapter_config`) から話者を自動登録します。YAML 側に話者ブロックを書く必要はありません。
+- **話者アダプタ**: `lora_dir`（既定 `models/LoRA/`）配下の `.safetensors` を起動時にスキャンし、それぞれに埋め込まれた metadata (`name` / `uuid` / `defaults` / `adapter_config`) から話者を自動登録します。YAML 側に話者ブロックを書く必要はありません。ディレクトリが無い / 空でも起動は止まらず、話者 0 体の caption 専用サーバとして立ち上がります（`/synth` の `speaker_id` は 404）。
 - **VoiceDesign（caption）**: ベースモデルが caption 条件付けに対応していれば（v4 系）、そのまま caption 合成に使われます。第 2 ランタイムはロードされず、同じ重みを二重に載せることもありません。v2 / v3 系の caption 非対応ベースを使う場合のみ、`caption_checkpoint`（または `caption_hf_repo`）で別建ての VoiceDesign チェックポイントを並載します。どちらも無い場合、caption 指定は 501 を返します。
 - **推論**: `/synth` にテキストと `speaker_id` (= 話者 UUID) または `caption`（自然文記述）を POST すると、WAV が返ります。
 
@@ -126,7 +126,7 @@ uv run python server.py \
 
 ## 5. Docker での起動
 
-`docker/runtime/Dockerfile` が最小イメージを作ります。`.venv` は起動時に `uv sync` でマウント先 volume に展開するので、イメージ自体は薄いままです。
+`docker/runtime/Dockerfile` が最小イメージを作ります。依存は起動時に `uv sync` でコンテナの system Python (`/usr/local`) へ入れるので、イメージ自体は薄いままです。ベースは `nvidia/cuda` ではなく `python:3.12-slim` です。PyPI の torch wheel が `nvidia-*-cu12` として CUDA ランタイムと cuDNN を持ってくるため、CUDA ベースイメージを敷くと同じ物が二重に載ります（約 4.4GB）。ドライバはこれまで通り `--gpus all` / compose の device reservation でホストから来ます。
 
 ### ビルド
 
@@ -142,7 +142,7 @@ docker compose -f docker/runtime/compose.yaml logs -f    # ログ追跡
 
 ボリュームの要点:
 
-- **`tts_venv`**: 初回に `uv sync --frozen --no-dev` で構築。2 回目以降は数秒で起動。
+- **`uv_cache`**: 初回の `uv sync --frozen --no-dev` で落とした wheel を保持。2 回目以降の起動が数秒で済みます。
 - **`hf_cache`**: DACVAE codec / tokenizer などの HF hub キャッシュを永続化。
 - **`../../models`**: ベースモデル (`model.safetensors`) と LoRA 話者 `.safetensors` を置く場所。未マウント / ベースモデル未配置なら `base_hf_repo` から取りに行きます。LoRA は `models/LoRA/` 配下に置いてください。新しい LoRA を追加したら**コンテナの再起動が必要**（起動時にだけスキャンするため）。
 
@@ -228,7 +228,7 @@ curl -s http://localhost:8765/synth \
   "text": "こんにちは、今日はいい天気ですね。",
   "num_steps": 40,
   "cfg_scale_text": 3.0,
-  "cfg_scale_caption": 3.0
+  "cfg_scale_caption": 4.0
 }
 ```
 
@@ -236,7 +236,7 @@ curl -s http://localhost:8765/synth \
 |-----------------------|------|------|
 | `caption`             | ◯    | 自然文による話者記述 |
 | `text`                | ◯    | 合成するテキスト |
-| `cfg_scale_caption`   | 任意 | caption CFG scale（デフォルト `3.0`） |
+| `cfg_scale_caption`   | 任意 | caption CFG scale（デフォルト `4.0`。公式の VoiceDesign デモに合わせた値） |
 | `seed` / `num_steps` / `cfg_scale_text` / `truncation_factor` | 任意 | LoRA モードと同じ |
 | `seconds` / `min_seconds` / `max_seconds` / `duration_scale` | 任意 | LoRA モードと同じ duration 制御 |
 

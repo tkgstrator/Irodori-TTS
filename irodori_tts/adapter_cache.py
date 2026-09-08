@@ -12,9 +12,12 @@ own.
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
+
+logger = logging.getLogger("irodori_tts.inference")
 
 
 class AdapterResidency:
@@ -22,14 +25,26 @@ class AdapterResidency:
 
     `slots` of 0 means unbounded — every adapter is expected to be loaded
     already, and `ensure` does nothing.
+
+    `pinned` names one adapter that is never evicted. A bot serves most
+    requests with its default speaker, and evicting that one only to reload
+    it moments later would make the common case pay for the rare one.
     """
 
-    def __init__(self, paths: dict[str, str], *, slots: int, resident: Iterable[str]) -> None:
+    def __init__(
+        self,
+        paths: dict[str, str],
+        *,
+        slots: int,
+        resident: Iterable[str],
+        pinned: str | None = None,
+    ) -> None:
         if slots < 0:
             raise ValueError(f"slots must not be negative: {slots}")
         self._paths = dict(paths)
         self._slots = int(slots)
         self._resident: OrderedDict[str, None] = OrderedDict((name, None) for name in resident)
+        self._pinned = pinned
         self._lock = threading.Lock()
 
     @property
@@ -64,7 +79,18 @@ class AdapterResidency:
                 self._resident.move_to_end(name)
                 return
             while len(self._resident) >= self._slots:
-                evicted, _ = self._resident.popitem(last=False)
-                evict(evicted)
+                victim = next((n for n in self._resident if n != self._pinned), None)
+                if victim is None:
+                    # Only the pinned adapter is resident and the budget is
+                    # exhausted (slots=1 with a pin). Load anyway: a request
+                    # must not fail because of the cap.
+                    logger.warning(
+                        "no evictable LoRA adapter; loading %s beyond the %d-slot budget",
+                        name,
+                        self._slots,
+                    )
+                    break
+                del self._resident[victim]
+                evict(victim)
             load(name, path)
             self._resident[name] = None
