@@ -228,7 +228,7 @@ curl -s http://localhost:8765/synth \
   "text": "こんにちは、今日はいい天気ですね。",
   "num_steps": 40,
   "cfg_scale_text": 3.0,
-  "cfg_scale_caption": 3.0
+  "cfg_scale_caption": 4.0
 }
 ```
 
@@ -236,7 +236,7 @@ curl -s http://localhost:8765/synth \
 |-----------------------|------|------|
 | `caption`             | ◯    | 自然文による話者記述 |
 | `text`                | ◯    | 合成するテキスト |
-| `cfg_scale_caption`   | 任意 | caption CFG scale（デフォルト `3.0`） |
+| `cfg_scale_caption`   | 任意 | caption CFG scale（デフォルト `4.0`。公式の VoiceDesign デモに合わせた値） |
 | `seed` / `num_steps` / `cfg_scale_text` / `truncation_factor` | 任意 | LoRA モードと同じ |
 | `seconds` / `min_seconds` / `max_seconds` / `duration_scale` | 任意 | LoRA モードと同じ duration 制御 |
 

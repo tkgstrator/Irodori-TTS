@@ -32,6 +32,13 @@ from irodori_tts.vds.shortcodes import expand_shortcodes
 
 logger = logging.getLogger("irodori_tts.server")
 
+# Upstream disagrees with itself: infer.py defaults --cfg-scale-caption to 3.0,
+# while gradio_app_voicedesign.py — the demo built for caption synthesis — opens
+# at 4.0. Follow the VoiceDesign demo, since that is the mode served here. At
+# 3.0 the drawn voice wanders off the caption: the same caption and text at two
+# seeds landed 96 Hz apart, one of them well below the "少し高め" it asked for.
+_DEFAULT_CFG_SCALE_CAPTION = 4.0
+
 
 def _wants_wav(request: Request) -> bool:
     accept = request.headers.get("accept", "")
@@ -54,7 +61,7 @@ def _caption_sampling_req(  # noqa: PLR0913
     *,
     num_steps: int = 40,
     cfg_scale_text: float = 3.0,
-    cfg_scale_caption: float = 3.0,
+    cfg_scale_caption: float = _DEFAULT_CFG_SCALE_CAPTION,
     truncation_factor: float | None = None,
     seed: int | None = None,
     seconds: float | None = None,
@@ -145,7 +152,7 @@ def _synth_single(  # noqa: C901, PLR0915
         cfg_cap = (
             float(req.cfg_scale_caption)
             if req.cfg_scale_caption and req.cfg_scale_caption > 0
-            else 3.0
+            else _DEFAULT_CFG_SCALE_CAPTION
         )
         trunc = (
             req.truncation_factor if req.truncation_factor and req.truncation_factor > 0 else None
@@ -326,7 +333,6 @@ def _synth_cue(  # noqa: C901, PLR0912, PLR0915
             ref.caption,
             num_steps=cue_num_steps,
             cfg_scale_text=cue_cfg_text,
-            cfg_scale_caption=3.0,
             truncation_factor=cue_trunc,
             seed=cue_seed if cue_seed is not None and cue_seed >= 0 else None,
             seconds=cue_seconds,
