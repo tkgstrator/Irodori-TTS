@@ -66,9 +66,7 @@ class ServerConfig:
     codec_repo: str
     codec_deterministic_encode: bool
     codec_deterministic_decode: bool
-    caption_checkpoint: str | None
-    caption_hf_repo: str | None
-    caption_hf_filename: str
+    model_id: str
     enable_watermark: bool
     tail_window_size: int
     tail_std_threshold: float
@@ -153,6 +151,16 @@ def _resolve_base_repo(raw: dict[str, Any]) -> str | None:
         raise ValueError(f"Unknown base_version: {version!r}. Known versions: {known}") from None
 
 
+def _default_model_id(raw: dict[str, Any], base_repo: str | None) -> str:
+    """The id GET /v1/models advertises, derived from whichever base is served."""
+    version = str(raw.get("base_version") or "").strip()
+    if version:
+        return f"irodori-tts-{version}"
+    if base_repo:
+        return base_repo.rsplit("/", 1)[-1].lower()
+    return "irodori-tts"
+
+
 def load_config(path: Path) -> ServerConfig:
     with path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
@@ -182,9 +190,10 @@ def load_config(path: Path) -> ServerConfig:
         for s in raw.get("speakers") or []
     )
 
+    base_hf_repo = _resolve_base_repo(raw)
     return ServerConfig(
         base_checkpoint=(str(raw["base_checkpoint"]) if raw.get("base_checkpoint") else None),
-        base_hf_repo=_resolve_base_repo(raw),
+        base_hf_repo=base_hf_repo,
         base_hf_filename=str(raw.get("base_hf_filename", "model.safetensors")),
         model_device=str(raw.get("model_device", "cuda")),
         codec_device=str(raw.get("codec_device", "cuda")),
@@ -193,11 +202,7 @@ def load_config(path: Path) -> ServerConfig:
         codec_repo=str(raw.get("codec_repo", "Aratako/Semantic-DACVAE-Japanese-32dim")),
         codec_deterministic_encode=bool(raw.get("codec_deterministic_encode", True)),
         codec_deterministic_decode=bool(raw.get("codec_deterministic_decode", True)),
-        caption_checkpoint=(
-            str(raw["caption_checkpoint"]) if raw.get("caption_checkpoint") else None
-        ),
-        caption_hf_repo=(str(raw["caption_hf_repo"]) if raw.get("caption_hf_repo") else None),
-        caption_hf_filename=str(raw.get("caption_hf_filename", "model.safetensors")),
+        model_id=str(raw.get("model_id") or _default_model_id(raw, base_hf_repo)),
         enable_watermark=bool(raw.get("enable_watermark", True)),
         tail_window_size=int(raw.get("tail_window_size", 20)),
         tail_std_threshold=float(raw.get("tail_std_threshold", 0.05)),
