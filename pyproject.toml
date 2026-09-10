@@ -1,6 +1,6 @@
 [project]
 name = "irodori-tts"
-version = "0.4.0"
+version = "0.5.0"
 description = "Irodori-TTS training and inference codebase"
 readme = "README.md"
 license = "MIT"
@@ -16,7 +16,9 @@ dependencies = [
     "pyaml-env>=1.2.1",
     "pyyaml>=6.0",
     "safetensors>=0.7.0",
-    "soundfile>=0.12.0",
+    # 0.13 bundles libsndfile 1.2, which the server needs to write MP3 and Opus
+    # for the OpenAI response_format values.
+    "soundfile>=0.13.0",
     "sentencepiece>=0.2.0,<0.3",
     "silentcipher @ git+https://github.com/SesameAILabs/silentcipher.git@d46d7d0893a583d8968ab3a6626e2289faec9152",
     "torch>=2.10.0",
@@ -224,6 +226,9 @@ pythonVersion = "3.12"
 dev = [
     "faster-whisper>=1.2.1",
     "onnxruntime<1.23",
+    # The real client, pointed at the test app, is how we check that the
+    # compatibility claim holds rather than only that our own JSON matches.
+    "openai>=2.0.0",
     "pytest>=9.0.3",
 ]
 

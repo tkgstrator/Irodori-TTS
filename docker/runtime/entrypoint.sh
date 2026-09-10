@@ -61,14 +61,10 @@ def q(v):
 print(f'_BASE_LOCAL={q(c.base_checkpoint)}')
 print(f'_BASE_REPO={q(c.base_hf_repo)}')
 print(f'_BASE_FILE={q(c.base_hf_filename)}')
-print(f'_CAP_LOCAL={q(c.caption_checkpoint)}')
-print(f'_CAP_REPO={q(c.caption_hf_repo)}')
-print(f'_CAP_FILE={q(c.caption_hf_filename)}')
 print(f'_CODEC_REPO={q(c.codec_repo)}')
 ")"
 
 download_if_missing "${_BASE_LOCAL}" "${_BASE_REPO}" "${_BASE_FILE}" "base model"
-download_if_missing "${_CAP_LOCAL}" "${_CAP_REPO}" "${_CAP_FILE}" "caption model"
 
 # Codec model (DACVAE) — downloaded by transformers/huggingface_hub at runtime,
 # but we can warm the cache here so the server starts faster.

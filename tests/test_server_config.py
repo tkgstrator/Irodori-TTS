@@ -1,10 +1,8 @@
-"""Characterization tests for server.py.
+"""Tests for everything below the HTTP boundary: config loading, LoRA discovery,
+the runtime registry, the request schema, defaults merging and the fade helper.
 
-These pin down the behavior of the config loader, the request schemas, the
-audio fade helper and the four HTTP routes exactly as they behave today, so a
-later refactor into ``irodori_tts/server/`` can be proven behavior-preserving.
-No GPU, no checkpoints and no network: every test either stays below the model
-boundary or builds the app with ``eager_load=False``.
+No GPU, no checkpoints and no network. The HTTP surface lives in
+``test_openai_api.py``.
 """
 
 from __future__ import annotations
@@ -12,19 +10,15 @@ from __future__ import annotations
 import json
 import uuid as uuid_lib
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
 import torch
 import yaml
-from fastapi import HTTPException, Request
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from safetensors.torch import save_file
 
-from irodori_tts.server import registry as registry_module
 from irodori_tts.server.audio import _apply_fade
 from irodori_tts.server.config import (
     _LORA_UUID_NAMESPACE,
@@ -35,94 +29,24 @@ from irodori_tts.server.config import (
     load_config,
     resolve_base_checkpoint,
 )
+from irodori_tts.server.errors import ApiError
 from irodori_tts.server.registry import RuntimeRegistry
-from irodori_tts.server.schemas import (
-    SynthRequest,
-    VdsDefaults,
-    VdsScriptBody,
-    _merge_defaults,
+from irodori_tts.server.schemas import SpeechRequest, _merge_defaults
+from tests.helpers import (
+    UUID_A,
+    UUID_B,
+    install_fake_runtime,
+    lora_test_config,
+    speaker_entry,
+    write_config,
+    write_lora,
 )
-from irodori_tts.server.synthesis import _synth_single
-from server import build_app
-
-UUID_A = "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb"
-UUID_B = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 
-def write_config(path: Path, data: dict[str, Any]) -> Path:
-    path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
-    return path
-
-
-def write_lora(path: Path, metadata: dict[str, str] | None = None) -> Path:
-    meta = {"adapter_config": "{}"}
-    if metadata:
-        meta.update(metadata)
-    save_file({"lora_A.weight": torch.zeros(2, 2)}, str(path), metadata=meta)
-    return path
-
-
-def speaker_entry(**overrides: Any) -> dict[str, Any]:
-    entry = {"uuid": UUID_A, "name": "Alice", "adapter": "/models/alice.safetensors"}
-    entry.update(overrides)
-    return entry
-
-
-class FakeRuntime:
-    """Stand-in for ``InferenceRuntime``: only what the registry and caption path touch."""
-
-    def __init__(self, checkpoint: str, *, use_caption_condition: bool) -> None:
-        self.checkpoint = checkpoint
-        self.model_cfg = SimpleNamespace(
-            use_caption_condition=use_caption_condition,
-            use_speaker_condition=True,
-        )
-        self.codec = SimpleNamespace(sample_rate=48000)
-        self.watermarker = SimpleNamespace(model=object())
-
-    def set_active_adapter(self, name: str) -> None:
-        self.active_adapter = name
-
-    def synthesize(self, req: Any, **_kwargs: Any) -> SimpleNamespace:
-        self.last_request = req
-        return SimpleNamespace(audio=torch.zeros(1, 4800), sample_rate=48000, used_seed=7)
-
-
-def install_fake_runtimes(
-    monkeypatch: pytest.MonkeyPatch, *, base_caption: bool
-) -> dict[str, list[str]]:
-    """Replace both runtime loaders with fakes and record the checkpoints they were asked for."""
-    calls: dict[str, list[Any]] = {"base": [], "caption": [], "slots": []}
-
-    def from_base_with_adapters(
-        *, key: Any, adapters: Any, default_adapter: Any, adapter_slots: int = 0
-    ) -> FakeRuntime:
-        del adapters, default_adapter
-        calls["slots"].append(adapter_slots)
-        calls["base"].append(key.checkpoint)
-        return FakeRuntime(key.checkpoint, use_caption_condition=base_caption)
-
-    def from_key(key: Any) -> FakeRuntime:
-        calls["caption"].append(key.checkpoint)
-        return FakeRuntime(key.checkpoint, use_caption_condition=True)
-
-    monkeypatch.setattr(
-        registry_module.InferenceRuntime, "from_base_with_adapters", from_base_with_adapters
-    )
-    monkeypatch.setattr(registry_module.InferenceRuntime, "from_key", from_key)
-    return calls
-
-
-def caption_test_config(tmp_path: Path, **extra: Any) -> Path:
-    """Config with one discoverable LoRA and an existing (dummy) base checkpoint file."""
-    ckpt = tmp_path / "base.safetensors"
-    ckpt.write_text("x", encoding="utf-8")
-    lora_dir = tmp_path / "loras"
-    lora_dir.mkdir()
-    write_lora(lora_dir / "alice.safetensors", {"name": "Alice", "uuid": UUID_A})
-    data: dict[str, Any] = {"base_checkpoint": str(ckpt), "lora_dir": str(lora_dir)}
-    data.update(extra)
-    return write_config(tmp_path / "c.yaml", data)
+def speech(**overrides: Any) -> SpeechRequest:
+    payload: dict[str, Any] = {"model": "m", "input": "hi", "voice": UUID_A}
+    payload.update(overrides)
+    return SpeechRequest(**payload)
 
 
 # ===================================================================
@@ -143,9 +67,7 @@ class TestLoadConfigDefaults:
         assert cfg.codec_repo == "Aratako/Semantic-DACVAE-Japanese-32dim"
         assert cfg.codec_deterministic_encode is True
         assert cfg.codec_deterministic_decode is True
-        assert cfg.caption_checkpoint is None
-        assert cfg.caption_hf_repo is None
-        assert cfg.caption_hf_filename == "model.safetensors"
+        assert cfg.model_id == "irodori-tts"
         assert cfg.tail_window_size == 20
         assert cfg.tail_std_threshold == 0.05
         assert cfg.tail_mean_threshold == 0.1
@@ -208,11 +130,24 @@ class TestLoadConfigDefaults:
         assert cfg.base_checkpoint == "123"
 
     def test_falsy_checkpoint_becomes_none(self, tmp_path: Path):
-        cfg = load_config(
-            write_config(tmp_path / "c.yaml", {"base_checkpoint": "", "caption_hf_repo": ""})
-        )
+        cfg = load_config(write_config(tmp_path / "c.yaml", {"base_checkpoint": ""}))
         assert cfg.base_checkpoint is None
-        assert cfg.caption_hf_repo is None
+
+
+class TestModelId:
+    def test_derived_from_base_version(self, tmp_path: Path):
+        cfg = load_config(write_config(tmp_path / "c.yaml", {"base_version": "v4.1-small"}))
+        assert cfg.model_id == "irodori-tts-v4.1-small"
+
+    def test_derived_from_an_explicit_repo(self, tmp_path: Path):
+        cfg = load_config(write_config(tmp_path / "c.yaml", {"base_hf_repo": "Someone/My-Fork"}))
+        assert cfg.model_id == "my-fork"
+
+    def test_explicit_model_id_wins(self, tmp_path: Path):
+        cfg = load_config(
+            write_config(tmp_path / "c.yaml", {"base_version": "v3", "model_id": "custom"})
+        )
+        assert cfg.model_id == "custom"
 
 
 class TestLoadConfigSpeakers:
@@ -502,8 +437,8 @@ class TestResolveCheckpoint:
             _resolve_checkpoint(str(tmp_path / "absent"), None, "model.safetensors", "base")
 
     def test_no_local_and_no_repo_raises(self):
-        with pytest.raises(FileNotFoundError, match="caption checkpoint not found"):
-            _resolve_checkpoint(None, None, "model.safetensors", "caption")
+        with pytest.raises(FileNotFoundError, match="base checkpoint not found"):
+            _resolve_checkpoint(None, None, "model.safetensors", "base")
 
     def test_resolve_base_checkpoint_reads_config(self, tmp_path: Path):
         ckpt = tmp_path / "base.safetensors"
@@ -518,238 +453,116 @@ class TestResolveCheckpoint:
 
 
 # ===================================================================
-# Caption runtime selection
+# Runtime loading
 # ===================================================================
 
 
-class TestCaptionRuntimeSelection:
-    def test_capable_base_serves_captions_without_a_second_runtime(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        calls = install_fake_runtimes(monkeypatch, base_caption=True)
-        registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))
+class TestRuntimeLoad:
+    def test_base_and_adapters_are_loaded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        calls = install_fake_runtime(monkeypatch)
+        registry = RuntimeRegistry(load_config(lora_test_config(tmp_path)))
         registry.load()
-        base, _ = registry.acquire(UUID_A)
-        assert registry.caption_available is True
-        assert registry.acquire_caption() is base
         assert len(calls["base"]) == 1
-        assert calls["caption"] == []
+        assert registry.acquire(UUID_A)[1].name == "Alice"
 
-    def test_explicit_caption_checkpoint_wins_over_a_capable_base(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        calls = install_fake_runtimes(monkeypatch, base_caption=True)
-        caption_ckpt = tmp_path / "voicedesign.safetensors"
-        caption_ckpt.write_text("x", encoding="utf-8")
-        path = caption_test_config(tmp_path, caption_checkpoint=str(caption_ckpt))
-        registry = RuntimeRegistry(load_config(path))
-        registry.load()
-        base, _ = registry.acquire(UUID_A)
-        assert registry.acquire_caption() is not base
-        assert calls["caption"] == [str(caption_ckpt)]
-
-    def test_legacy_sidecar_still_serves_captions_for_an_incapable_base(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        calls = install_fake_runtimes(monkeypatch, base_caption=False)
-        path = caption_test_config(
-            tmp_path, caption_hf_repo="Aratako/Irodori-TTS-500M-v2-VoiceDesign"
-        )
-        registry = RuntimeRegistry(load_config(path))
-        registry.load()
-        base, _ = registry.acquire(UUID_A)
-        assert registry.caption_available is True
-        assert registry.acquire_caption() is not base
-        assert len(calls["caption"]) == 1
-
-    def test_incapable_base_without_a_caption_checkpoint_has_no_caption(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        install_fake_runtimes(monkeypatch, base_caption=False)
-        registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))
-        registry.load()
-        assert registry.caption_available is False
-        with pytest.raises(RuntimeError, match="Caption runtime not configured"):
-            registry.acquire_caption()
-
-    def test_base_serves_captions_with_no_lora_at_all(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        calls = install_fake_runtimes(monkeypatch, base_caption=True)
+    def test_no_speakers_loads_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Every voice is a LoRA, so a base with none attached has nothing to say."""
+        calls = install_fake_runtime(monkeypatch)
         ckpt = tmp_path / "base.safetensors"
         ckpt.write_text("x", encoding="utf-8")
         path = write_config(tmp_path / "c.yaml", {"base_checkpoint": str(ckpt)})
         registry = RuntimeRegistry(load_config(path))
         registry.load()
-        assert registry.caption_available is True
         assert calls["base"] == []
-        assert calls["caption"] == [str(ckpt)]
         with pytest.raises(KeyError):
             registry.acquire(UUID_A)
-
-    def test_sidecar_caption_checkpoint_is_loaded_once_with_no_lora(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        calls = install_fake_runtimes(monkeypatch, base_caption=True)
-        ckpt = tmp_path / "base.safetensors"
-        ckpt.write_text("x", encoding="utf-8")
-        caption_ckpt = tmp_path / "voicedesign.safetensors"
-        caption_ckpt.write_text("x", encoding="utf-8")
-        path = write_config(
-            tmp_path / "c.yaml",
-            {"base_checkpoint": str(ckpt), "caption_checkpoint": str(caption_ckpt)},
-        )
-        registry = RuntimeRegistry(load_config(path))
-        registry.load()
-        assert registry.caption_available is True
-        assert calls["caption"] == [str(caption_ckpt)]
 
     def test_watermarking_is_left_on_by_default(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        install_fake_runtimes(monkeypatch, base_caption=True)
-        registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))
+        install_fake_runtime(monkeypatch)
+        registry = RuntimeRegistry(load_config(lora_test_config(tmp_path)))
         registry.load()
         base, _ = registry.acquire(UUID_A)
         assert base.watermarker.model is not None
 
-    def test_disabling_the_watermark_drops_the_backend_from_every_runtime(
+    def test_disabling_the_watermark_drops_the_backend(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        install_fake_runtimes(monkeypatch, base_caption=False)
-        path = caption_test_config(
-            tmp_path,
-            enable_watermark=False,
-            caption_hf_repo="Aratako/Irodori-TTS-500M-v2-VoiceDesign",
-        )
+        install_fake_runtime(monkeypatch)
+        path = lora_test_config(tmp_path, enable_watermark=False)
         registry = RuntimeRegistry(load_config(path))
         registry.load()
         base, _ = registry.acquire(UUID_A)
         assert base.watermarker.model is None
-        assert registry.acquire_caption().watermarker.model is None
 
-    def test_unloaded_registry_has_no_caption(self, tmp_path: Path):
-        registry = RuntimeRegistry(load_config(caption_test_config(tmp_path)))
-        assert registry.caption_available is False
-        with pytest.raises(RuntimeError, match="Caption runtime not configured"):
-            registry.acquire_caption()
+    def test_unloaded_registry_refuses_to_acquire(self, tmp_path: Path):
+        registry = RuntimeRegistry(load_config(lora_test_config(tmp_path)))
+        with pytest.raises(RuntimeError, match="not loaded"):
+            registry.acquire(UUID_A)
 
 
 # ===================================================================
-# SynthRequest schema
+# SpeechRequest schema
 # ===================================================================
 
 
-class TestSynthRequestSchema:
-    def test_all_fields_optional(self):
-        req = SynthRequest()
-        assert req.speaker_id is None
-        assert req.text is None
+class TestSpeechRequestSchema:
+    def test_defaults(self):
+        req = speech()
+        assert req.response_format == "mp3"
+        assert req.speed == 1.0
+        assert req.stream_format == "audio"
+        assert req.instructions is None
         assert req.seed is None
-        assert req.script is None
-        assert req.seconds is None
-        assert req.min_seconds is None
-        assert req.max_seconds is None
-        assert req.duration_scale is None
+
+    def test_voice_accepts_the_object_form(self):
+        assert speech(voice={"id": UUID_A}).voice_id == UUID_A
+
+    def test_voice_accepts_the_string_form(self):
+        assert speech(voice=UUID_A).voice_id == UUID_A
 
     def test_negative_seed_and_scales_are_accepted(self):
-        req = SynthRequest(text="hi", seed=-1, num_steps=-5, cfg_scale_text=-1.0)
+        req = speech(seed=-1, num_steps=-5, cfg_scale_text=-1.0)
         assert req.seed == -1
         assert req.num_steps == -5
 
     @pytest.mark.parametrize(
         "payload",
         [
-            {"text": ""},
-            {"text": "hi", "seconds": 0},
-            {"text": "hi", "seconds": -1},
-            {"text": "hi", "min_seconds": 0},
-            {"text": "hi", "max_seconds": 0},
-            {"text": "hi", "duration_scale": 0},
-            {"text": "hi", "min_seconds": 5.0, "max_seconds": 1.0},
-            {"text": "hi", "seed": "abc"},
+            {"input": ""},
+            {"input": "x" * 4097},
+            {"voice": {"nope": "x"}},
+            {"response_format": "ogg"},
+            {"stream_format": "chunked"},
+            {"speed": 0.2},
+            {"speed": 4.1},
+            {"seconds": 0},
+            {"min_seconds": 0},
+            {"min_seconds": 5.0, "max_seconds": 1.0},
+            {"seed": "abc"},
         ],
     )
     def test_rejected_payloads(self, payload: dict[str, Any]):
         with pytest.raises(ValidationError):
-            SynthRequest(**payload)
+            speech(**payload)
+
+    @pytest.mark.parametrize("missing", ["model", "input", "voice"])
+    def test_required_fields(self, missing: str):
+        payload = {"model": "m", "input": "hi", "voice": UUID_A}
+        del payload[missing]
+        with pytest.raises(ValidationError):
+            SpeechRequest(**payload)
+
+    def test_speed_bounds_are_inclusive(self):
+        assert speech(speed=0.25).speed == 0.25
+        assert speech(speed=4.0).speed == 4.0
 
     def test_equal_duration_bounds_allowed(self):
-        assert SynthRequest(text="hi", min_seconds=2.0, max_seconds=2.0).min_seconds == 2.0
+        assert speech(min_seconds=2.0, max_seconds=2.0).min_seconds == 2.0
 
     def test_unknown_fields_are_ignored(self):
-        assert not hasattr(SynthRequest(text="hi", bogus=1), "bogus")
-
-
-class TestVdsSchemaModels:
-    def test_minimal_script_body(self):
-        body = VdsScriptBody(
-            version=1,
-            speakers={"a": {"type": "lora", "uuid": UUID_A}},
-            cues=[{"kind": "speech", "speaker": "a", "text": "hi"}],
-        )
-        assert body.title is None
-        assert body.defaults is None
-        assert body.cues[0].options is None
-
-    def test_defaults_gap_is_one(self):
-        defaults = VdsDefaults()
-        assert defaults.gap == 1.0
-        assert defaults.num_steps is None
-        assert defaults.seed is None
-
-    def test_model_dump_exclude_none_round_trips_to_parser_shape(self):
-        body = VdsScriptBody(
-            version=1,
-            speakers={"a": {"type": "lora", "uuid": UUID_A}},
-            cues=[{"kind": "speech", "speaker": "a", "text": "hi"}],
-        )
-        assert body.model_dump(exclude_none=True) == {
-            "version": 1,
-            "speakers": {"a": {"type": "lora", "uuid": UUID_A}},
-            "cues": [{"kind": "speech", "speaker": "a", "text": "hi"}],
-        }
-
-    @pytest.mark.parametrize(
-        ("payload", "loc"),
-        [
-            ({"version": 2, "speakers": {}, "cues": []}, ("version",)),
-            (
-                {"version": 1, "speakers": {"a": {"type": "lora", "uuid": "nope"}}, "cues": []},
-                ("speakers", "a", "lora", "uuid"),
-            ),
-            (
-                {"version": 1, "speakers": {"a": {"type": "bogus"}}, "cues": []},
-                ("speakers", "a"),
-            ),
-            (
-                {"version": 1, "speakers": {"a": {"type": "caption", "caption": ""}}, "cues": []},
-                ("speakers", "a", "caption", "caption"),
-            ),
-            ({"version": 1, "speakers": {}, "cues": [{"kind": "bgm"}]}, ("cues", 0)),
-            (
-                {"version": 1, "speakers": {}, "cues": [{"kind": "pause", "duration": 0}]},
-                ("cues", 0, "pause", "duration"),
-            ),
-            (
-                {"version": 1, "speakers": {}, "cues": [{"kind": "scene", "name": ""}]},
-                ("cues", 0, "scene", "name"),
-            ),
-            ({"version": 1, "cues": []}, ("speakers",)),
-            ({"version": 1, "speakers": {}}, ("cues",)),
-        ],
-    )
-    def test_rejected_script_bodies(self, payload: dict[str, Any], loc: tuple[Any, ...]):
-        with pytest.raises(ValidationError) as excinfo:
-            VdsScriptBody(**payload)
-        assert any(err["loc"] == loc for err in excinfo.value.errors())
-
-    def test_negative_gap_rejected(self):
-        with pytest.raises(ValidationError):
-            VdsDefaults(gap=-1)
-
-    def test_zero_gap_allowed(self):
-        assert VdsDefaults(gap=0).gap == 0.0
+        assert not hasattr(speech(bogus=1), "bogus")
 
 
 # ===================================================================
@@ -772,35 +585,35 @@ BASE_RESOLVED = {
 
 class TestMergeDefaults:
     def test_bare_request_gets_hardcoded_defaults(self):
-        assert _merge_defaults(SynthRequest(text="hi"), {}) == BASE_RESOLVED
+        assert _merge_defaults(speech(), {}) == BASE_RESOLVED
 
     def test_speaker_defaults_override_hardcoded(self):
-        params = _merge_defaults(SynthRequest(text="hi"), {"num_steps": 10, "max_seconds": 12.0})
+        params = _merge_defaults(speech(), {"num_steps": 10, "max_seconds": 12.0})
         assert params["num_steps"] == 10
         assert params["max_seconds"] == 12.0
 
     def test_request_overrides_speaker_defaults(self):
-        params = _merge_defaults(SynthRequest(text="hi", num_steps=5), {"num_steps": 10})
+        params = _merge_defaults(speech(num_steps=5), {"num_steps": 10})
         assert params["num_steps"] == 5
 
     def test_unknown_speaker_default_keys_ignored(self):
-        params = _merge_defaults(SynthRequest(text="hi"), {"bogus": 1})
+        params = _merge_defaults(speech(), {"bogus": 1})
         assert "bogus" not in params
 
     def test_speaker_default_seed_is_used(self):
-        params = _merge_defaults(SynthRequest(text="hi"), {"seed": 99})
+        params = _merge_defaults(speech(), {"seed": 99})
         assert params["seed"] == 99
 
     def test_request_seed_overrides_speaker_default_seed(self):
-        params = _merge_defaults(SynthRequest(text="hi", seed=7), {"seed": 99})
+        params = _merge_defaults(speech(seed=7), {"seed": 99})
         assert params["seed"] == 7
 
     def test_negative_request_seed_means_random_despite_speaker_default(self):
-        params = _merge_defaults(SynthRequest(text="hi", seed=-1), {"seed": 99})
+        params = _merge_defaults(speech(seed=-1), {"seed": 99})
         assert params["seed"] is None
 
     def test_negative_speaker_default_seed_means_random(self):
-        params = _merge_defaults(SynthRequest(text="hi"), {"seed": -1})
+        params = _merge_defaults(speech(), {"seed": -1})
         assert params["seed"] is None
 
     @pytest.mark.parametrize(
@@ -814,38 +627,42 @@ class TestMergeDefaults:
         ],
     )
     def test_non_positive_override_falls_back_to_speaker_default(self, field: str):
-        req = SynthRequest(text="hi", **{field: -1})
-        params = _merge_defaults(req, {field: 7.5})
+        params = _merge_defaults(speech(**{field: -1}), {field: 7.5})
         assert params[field] == 7.5
 
     def test_zero_override_is_also_ignored(self):
-        params = _merge_defaults(SynthRequest(text="hi", cfg_scale_text=0.0), {})
+        params = _merge_defaults(speech(cfg_scale_text=0.0), {})
         assert params["cfg_scale_text"] == 3.0
 
+    def test_speed_does_not_touch_the_merged_duration_scale(self):
+        """``speed`` is applied on top of the merged value, not merged into it."""
+        params = _merge_defaults(speech(speed=2.0), {"duration_scale": 1.5})
+        assert params["duration_scale"] == 1.5
+
     @pytest.mark.parametrize("bad", [-2, 0])
-    def test_non_positive_duration_scale_from_defaults_raises_http_422(self, bad: float):
-        with pytest.raises(HTTPException) as excinfo:
-            _merge_defaults(SynthRequest(text="hi"), {"duration_scale": bad})
-        assert excinfo.value.status_code == 422
-        assert "duration_scale" in excinfo.value.detail
+    def test_non_positive_duration_scale_from_defaults_is_rejected(self, bad: float):
+        with pytest.raises(ApiError) as excinfo:
+            _merge_defaults(speech(), {"duration_scale": bad})
+        assert excinfo.value.status_code == 400
+        assert "duration_scale" in excinfo.value.message
 
     def test_positive_duration_scale_from_defaults_is_kept(self):
-        params = _merge_defaults(SynthRequest(text="hi"), {"duration_scale": 1.5})
+        params = _merge_defaults(speech(), {"duration_scale": 1.5})
         assert params["duration_scale"] == 1.5
 
     @pytest.mark.parametrize(("seed", "expected"), [(None, None), (-1, None), (0, 0), (42, 42)])
     def test_seed_normalization(self, seed: int | None, expected: int | None):
-        assert _merge_defaults(SynthRequest(text="hi", seed=seed), {})["seed"] == expected
+        assert _merge_defaults(speech(seed=seed), {})["seed"] == expected
 
-    def test_merged_bounds_inversion_raises_http_422(self):
-        with pytest.raises(HTTPException) as excinfo:
-            _merge_defaults(SynthRequest(text="hi"), {"min_seconds": 10.0, "max_seconds": 2.0})
-        assert excinfo.value.status_code == 422
-        assert "after merging speaker defaults" in excinfo.value.detail
+    def test_merged_bounds_inversion_is_rejected(self):
+        with pytest.raises(ApiError) as excinfo:
+            _merge_defaults(speech(), {"min_seconds": 10.0, "max_seconds": 2.0})
+        assert excinfo.value.status_code == 400
+        assert "after merging speaker defaults" in excinfo.value.message
 
     def test_request_bound_can_rescue_speaker_default_inversion(self):
         params = _merge_defaults(
-            SynthRequest(text="hi", max_seconds=20.0),
+            speech(max_seconds=20.0),
             {"min_seconds": 10.0, "max_seconds": 2.0},
         )
         assert params["min_seconds"] == 10.0
@@ -919,318 +736,3 @@ class TestApplyFade:
         """
         with pytest.raises(AttributeError):
             _apply_fade(torch.ones(1000), 1000)
-
-
-# ===================================================================
-# _synth_single
-# ===================================================================
-
-
-class TestSynthSingle:
-    def test_shortcode_expansion_does_not_mutate_the_request(self, tmp_path: Path):
-        cfg = load_config(write_config(tmp_path / "c.yaml", {}))
-        req = SynthRequest(text="ねえ{cheerful}", speaker_id=UUID_A)
-        with pytest.raises(HTTPException) as excinfo:
-            _synth_single(
-                RuntimeRegistry(cfg),
-                cfg,
-                req,
-                Request({"type": "http", "headers": []}),
-            )
-        assert excinfo.value.status_code == 404
-        assert req.text == "ねえ{cheerful}"
-
-
-# ===================================================================
-# HTTP surface
-# ===================================================================
-
-
-@pytest.fixture
-def client(tmp_path: Path) -> TestClient:
-    path = write_config(
-        tmp_path / "c.yaml",
-        {
-            "speakers": [
-                speaker_entry(
-                    defaults={"num_steps": 30},
-                    category_id="female",
-                    category_label="女性",
-                )
-            ]
-        },
-    )
-    return TestClient(build_app(path, eager_load=False))
-
-
-@pytest.fixture
-def empty_client(tmp_path: Path) -> TestClient:
-    return TestClient(build_app(write_config(tmp_path / "c.yaml", {}), eager_load=False))
-
-
-def vds_upload(source: str | bytes) -> dict[str, Any]:
-    data = source.encode("utf-8") if isinstance(source, str) else source
-    return {"file": ("script.vds", data, "text/plain")}
-
-
-class TestHealth:
-    def test_reports_speaker_count(self, client: TestClient):
-        assert client.get("/health").json() == {"status": "ok", "speakers": 1, "caption": False}
-
-    def test_empty_config(self, empty_client: TestClient):
-        assert empty_client.get("/health").json() == {
-            "status": "ok",
-            "speakers": 0,
-            "caption": False,
-        }
-
-
-class TestSpeakers:
-    def test_payload_shape(self, client: TestClient):
-        assert client.get("/speakers").json() == {
-            "speakers": [
-                {
-                    "uuid": UUID_A,
-                    "name": "Alice",
-                    "cv": None,
-                    "defaults": {"num_steps": 30},
-                    "category": {"id": "female", "label": "女性"},
-                }
-            ]
-        }
-
-    def test_empty_config(self, empty_client: TestClient):
-        assert empty_client.get("/speakers").json() == {"speakers": []}
-
-
-class TestSynthValidation:
-    def test_missing_text(self, client: TestClient):
-        response = client.post("/synth", json={"speaker_id": UUID_A})
-        assert response.status_code == 422
-        assert response.json()["detail"] == "'text' is required"
-
-    def test_empty_text_rejected_by_schema(self, client: TestClient):
-        response = client.post("/synth", json={"speaker_id": UUID_A, "text": ""})
-        assert response.status_code == 422
-        assert response.json()["detail"][0]["loc"] == ["body", "text"]
-
-    def test_neither_speaker_nor_caption(self, client: TestClient):
-        response = client.post("/synth", json={"text": "hi"})
-        assert response.status_code == 422
-        assert response.json()["detail"] == "either 'speaker_id' or 'caption' is required"
-
-    def test_speaker_and_caption_mutually_exclusive(self, client: TestClient):
-        response = client.post(
-            "/synth", json={"text": "hi", "speaker_id": UUID_A, "caption": "やわらかい声"}
-        )
-        assert response.status_code == 422
-        assert response.json()["detail"] == "'speaker_id' and 'caption' are mutually exclusive"
-
-    def test_inverted_duration_bounds(self, client: TestClient):
-        response = client.post(
-            "/synth",
-            json={"text": "hi", "speaker_id": UUID_A, "min_seconds": 5, "max_seconds": 1},
-        )
-        assert response.status_code == 422
-        assert response.json()["detail"][0]["type"] == "value_error"
-
-    def test_non_positive_seconds(self, client: TestClient):
-        response = client.post("/synth", json={"text": "hi", "speaker_id": UUID_A, "seconds": 0})
-        assert response.status_code == 422
-        assert response.json()["detail"][0]["ctx"] == {"gt": 0.0}
-
-    def test_unknown_speaker_id_is_404(self, client: TestClient):
-        response = client.post("/synth", json={"text": "hi", "speaker_id": UUID_B})
-        assert response.status_code == 404
-        assert response.json()["detail"] == f"unknown speaker_id: {UUID_B}"
-
-    def test_caption_without_any_caption_capable_runtime_is_501(self, client: TestClient):
-        """No runtime is loaded here, so nothing can serve captions."""
-        response = client.post("/synth", json={"text": "hi", "caption": "やわらかい声"})
-        assert response.status_code == 501
-        assert response.json()["detail"] == "caption runtime not configured"
-
-    def test_malformed_script_is_422(self, client: TestClient):
-        response = client.post(
-            "/synth",
-            json={"script": {"version": 2, "speakers": {}, "cues": []}},
-        )
-        assert response.status_code == 422
-        assert response.json()["detail"][0]["loc"] == ["body", "script", "version"]
-
-    def test_script_without_speech_cues_is_422(self, client: TestClient):
-        response = client.post(
-            "/synth",
-            json={
-                "script": {
-                    "version": 1,
-                    "speakers": {"a": {"type": "lora", "uuid": UUID_A}},
-                    "cues": [{"kind": "scene", "name": "幕"}],
-                }
-            },
-        )
-        assert response.status_code == 422
-        assert response.json()["detail"] == "no speech cues in script"
-
-    def test_script_with_unknown_uuid_is_404(self, client: TestClient):
-        response = client.post(
-            "/synth",
-            json={
-                "script": {
-                    "version": 1,
-                    "speakers": {"a": {"type": "lora", "uuid": UUID_B}},
-                    "cues": [{"kind": "speech", "speaker": "a", "text": "hi"}],
-                }
-            },
-        )
-        assert response.status_code == 404
-        assert UUID_B in response.json()["detail"]
-
-    def test_script_takes_precedence_over_missing_text(self, client: TestClient):
-        """With a script present, the single-cue 'text is required' check is skipped."""
-        response = client.post(
-            "/synth",
-            json={
-                "script": {
-                    "version": 1,
-                    "speakers": {"a": {"type": "caption", "caption": "やわらかい声"}},
-                    "cues": [{"kind": "speech", "speaker": "a", "text": "hi"}],
-                }
-            },
-        )
-        assert response.status_code == 501
-
-
-class TestSynthVdsValidation:
-    def test_missing_file_is_422(self, client: TestClient):
-        assert client.post("/synth/vds").status_code == 422
-
-    def test_non_utf8_body_is_422(self, client: TestClient):
-        response = client.post("/synth/vds", files=vds_upload(b"\xff\xfe\x00bad"))
-        assert response.status_code == 422
-        assert response.json()["detail"] == "file must be UTF-8 encoded"
-
-    def test_parse_error_is_422(self, client: TestClient):
-        response = client.post("/synth/vds", files=vds_upload("@version: 2\n"))
-        assert response.status_code == 422
-        assert "unsupported version" in response.json()["detail"]
-
-    def test_no_speech_cues_is_422(self, client: TestClient):
-        response = client.post(
-            "/synth/vds", files=vds_upload(f"@version: 1\n@speaker a = {UUID_A}\n")
-        )
-        assert response.status_code == 422
-        assert response.json()["detail"] == "no speech cues in script"
-
-    def test_unknown_uuid_is_404(self, client: TestClient):
-        response = client.post(
-            "/synth/vds", files=vds_upload(f"@version: 1\n@speaker a = {UUID_B}\n\na: hi\n")
-        )
-        assert response.status_code == 404
-        assert UUID_B in response.json()["detail"]
-
-    def test_caption_speaker_without_any_caption_capable_runtime_is_501(self, client: TestClient):
-        response = client.post(
-            "/synth/vds",
-            files=vds_upload('@version: 1\n@speaker a = caption "やわらかい声"\n\na: hi\n'),
-        )
-        assert response.status_code == 501
-        assert "caption runtime not configured" in response.json()["detail"]
-
-    def test_utf8_bom_is_stripped(self, client: TestClient):
-        source = f"@version: 1\n@speaker a = {UUID_B}\n\na: hi\n"
-        response = client.post(
-            "/synth/vds", files=vds_upload(b"\xef\xbb\xbf" + source.encode("utf-8"))
-        )
-        assert response.status_code == 404
-
-
-class TestCaptionCapableBaseRoutes:
-    """With a caption-capable base and no caption checkpoint, caption requests stop being 501."""
-
-    @pytest.fixture
-    def caption_client(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-        install_fake_runtimes(monkeypatch, base_caption=True)
-        return TestClient(build_app(caption_test_config(tmp_path), eager_load=True))
-
-    def test_health_reports_caption(self, caption_client: TestClient):
-        assert caption_client.get("/health").json() == {
-            "status": "ok",
-            "speakers": 1,
-            "caption": True,
-        }
-
-    def test_single_cue_caption_synthesis(self, caption_client: TestClient):
-        response = caption_client.post("/synth", json={"text": "hi", "caption": "やわらかい声"})
-        assert response.status_code == 200
-        assert response.headers["content-type"] == "audio/pcm"
-        assert response.headers["X-TTS-Sample-Rate"] == "48000"
-
-    def test_vds_caption_speaker(self, caption_client: TestClient):
-        response = caption_client.post(
-            "/synth/vds",
-            files=vds_upload('@version: 1\n@speaker a = caption "やわらかい声"\n\na: hi\n'),
-        )
-        assert response.status_code == 200
-        assert response.headers["X-TTS-Cue-Count"] == "1"
-
-
-class TestAdapterSurvivesSynthesis:
-    """The adapter acquire() activates must not be disabled inside synthesize().
-
-    SamplingRequest defaults to keep_adapter=False, under which
-    _prepare_lora_for_request() calls disable_adapter() and every LoRA speaker
-    comes out as the base voice. The server paths must opt out; the caption
-    path must not, or a leftover speaker adapter would color caption output.
-    """
-
-    @pytest.fixture
-    def runtimes(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> tuple[TestClient, dict[str, FakeRuntime]]:
-        made: dict[str, FakeRuntime] = {}
-
-        def from_base_with_adapters(
-            *, key: Any, adapters: Any, default_adapter: Any, adapter_slots: int = 0
-        ) -> FakeRuntime:
-            del adapters, default_adapter, adapter_slots
-            made["base"] = FakeRuntime(key.checkpoint, use_caption_condition=True)
-            return made["base"]
-
-        monkeypatch.setattr(
-            registry_module.InferenceRuntime, "from_base_with_adapters", from_base_with_adapters
-        )
-        client = TestClient(build_app(caption_test_config(tmp_path), eager_load=True))
-        return client, made
-
-    def test_lora_synthesis_keeps_the_acquired_adapter(
-        self, runtimes: tuple[TestClient, dict[str, FakeRuntime]]
-    ):
-        client, made = runtimes
-        response = client.post("/synth", json={"text": "hi", "speaker_id": UUID_A})
-        assert response.status_code == 200
-        assert made["base"].last_request.keep_adapter is True
-
-    def test_caption_synthesis_does_not_keep_a_speaker_adapter(
-        self, runtimes: tuple[TestClient, dict[str, FakeRuntime]]
-    ):
-        client, made = runtimes
-        response = client.post("/synth", json={"text": "hi", "caption": "やわらかい声"})
-        assert response.status_code == 200
-        assert made["base"].last_request.keep_adapter is False
-
-
-class TestOpenApiContract:
-    def test_routes_are_registered(self, client: TestClient):
-        paths = client.get("/openapi.json").json()["paths"]
-        assert set(paths) == {"/health", "/speakers", "/synth", "/synth/vds"}
-        assert set(paths["/synth"]) == {"post"}
-        assert set(paths["/synth/vds"]) == {"post"}
-        assert set(paths["/health"]) == {"get"}
-        assert set(paths["/speakers"]) == {"get"}
-
-    def test_audio_media_types_documented(self, client: TestClient):
-        paths = client.get("/openapi.json").json()["paths"]
-        for route in ("/synth", "/synth/vds"):
-            content = paths[route]["post"]["responses"]["200"]["content"]
-            assert set(content) >= {"audio/wav", "audio/pcm"}

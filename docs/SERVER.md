@@ -1,15 +1,17 @@
 # Irodori-TTS 推論サーバガイド
 
-学習済みの LoRA 話者アダプタを FastAPI で配信する `server.py` の使い方です。1 つのベースモデル + 複数 LoRA を 1 プロセスに載せ、リクエストごとに active adapter を切り替えて合成します。現行の統合チェックポイント `Aratako/Irodori-TTS-v4.1-Small` は caption 条件付けを内蔵しているため、自然文による話者記述（VoiceDesign）での合成も同じベースモデルだけで行えます。
+学習済みの LoRA 話者アダプタを FastAPI で配信する `server.py` の使い方です。1 つのベースモデル + 複数 LoRA を 1 プロセスに載せ、リクエストごとに active adapter を切り替えて合成します。
+
+API は OpenAI の音声合成エンドポイントに合わせてあります。OpenAI 公式の SDK の `base_url` をこのサーバに向ければ、変換層を挟まずにそのまま喋らせられます。
 
 ---
 
 ## 1. 全体像
 
-- **ベースモデル（LoRA）**: `configs/runtime.yaml` の `base_checkpoint`（ローカルに無ければ `base_hf_repo` から HF に取りに行きます）を 1 回だけ読み込み。
-- **話者アダプタ**: `lora_dir`（既定 `models/LoRA/`）配下の `.safetensors` を起動時にスキャンし、それぞれに埋め込まれた metadata (`name` / `uuid` / `defaults` / `adapter_config`) から話者を自動登録します。YAML 側に話者ブロックを書く必要はありません。ディレクトリが無い / 空でも起動は止まらず、話者 0 体の caption 専用サーバとして立ち上がります（`/synth` の `speaker_id` は 404）。
-- **VoiceDesign（caption）**: ベースモデルが caption 条件付けに対応していれば（v4 系）、そのまま caption 合成に使われます。第 2 ランタイムはロードされず、同じ重みを二重に載せることもありません。v2 / v3 系の caption 非対応ベースを使う場合のみ、`caption_checkpoint`（または `caption_hf_repo`）で別建ての VoiceDesign チェックポイントを並載します。どちらも無い場合、caption 指定は 501 を返します。
-- **推論**: `/synth` にテキストと `speaker_id` (= 話者 UUID) または `caption`（自然文記述）を POST すると、WAV が返ります。
+- **ベースモデル**: `configs/runtime.yaml` の `base_checkpoint`（ローカルに無ければ `base_hf_repo` から HF に取りに行きます）を 1 回だけ読み込み。
+- **話者アダプタ**: `lora_dir`（既定 `models/LoRA/`）配下の `.safetensors` を起動時にスキャンし、それぞれに埋め込まれた metadata (`name` / `uuid` / `defaults` / `adapter_config`) から話者を自動登録します。YAML 側に話者ブロックを書く必要はありません。声はすべて LoRA なので、1 体も見つからなければ何も読み込まず、合成要求は 400 を返します。
+- **推論**: `POST /v1/audio/speech` に `model` / `input` / `voice`（話者 UUID）を渡すと音声が返ります。UUID は `GET /v1/audio/voices` で拾います。
+- **VoiceDesign（自然文で声を作る caption モード）は廃止しました**。同じ seed でも台詞が変わると声が変わってしまい、キャラクターの声を固定する用途に使えなかったためです。声は LoRA 話者だけになりました。
 
 ---
 
@@ -29,11 +31,8 @@ codec_deterministic_encode: true
 codec_deterministic_decode: true
 enable_watermark: false
 
-# caption 条件付けは v4.1 ベースに内蔵されているため、caption_* は不要。
-# v2 / v3 ベースで caption を使う場合のみ以下を指定する:
-#   caption_checkpoint: models/Irodori-TTS-500M-v2-VoiceDesign/model.safetensors
-#   caption_hf_repo: Aratako/Irodori-TTS-500M-v2-VoiceDesign
-#   caption_hf_filename: model.safetensors
+# GET /v1/models が名乗る ID。省略すると base_version から作られる。
+# model_id: irodori-tts-v4.1-small
 
 tail_window_size: 20
 tail_std_threshold: 0.05
@@ -55,8 +54,7 @@ lora_dir: models/LoRA
 | `codec_repo`                 | DACVAE codec の HF repo |
 | `codec_deterministic_encode/decode` | 決定論モード（同じ入力 → 同じ出力） |
 | `enable_watermark`           | watermark 付与を有効にするか（通常 `false`） |
-| `caption_checkpoint`         | 別建て VoiceDesign チェックポイントのローカルパス（任意）。指定するとベースが caption 対応でもこちらが優先される |
-| `caption_hf_repo` / `caption_hf_filename` | 上記の HF fallback。両方省略時は caption 対応ベース（v4 系）がそのまま使われ、非対応ベースなら caption は無効 |
+| `model_id`                   | `GET /v1/models` が返す ID で、`POST /v1/audio/speech` の `model` に一致が要る。省略時は `base_version` から `irodori-tts-v4.1-small` のように作られる |
 | `tail_window_size`           | 末尾トリミングのウィンドウサイズ（デフォルト `20`） |
 | `tail_std_threshold`         | 末尾トリミングの標準偏差閾値（デフォルト `0.05`） |
 | `tail_mean_threshold`        | 末尾トリミングの平均値閾値（デフォルト `0.1`） |
@@ -150,184 +148,143 @@ docker compose -f docker/runtime/compose.yaml logs -f    # ログ追跡
 
 ## 6. API
 
-### `GET /health`
+OpenAI の音声合成 API に合わせてあります。差分は次の三つです。
 
-```json
-{"status": "ok", "speakers": 3}
+- `voice` に入れるのは話者 UUID です。`alloy` のような短い名前ではありません。
+- `instructions` は受け付けません（VoiceDesign を廃止したため）。渡すと 400 になります。
+- OpenAI に無い調整つまみを追加フィールドとして受けます。公式 SDK からは `extra_body` で渡せます。
+
+鍵の検査はしません。SDK は `Authorization` ヘッダを必ず送りますが、こちらは読まずに捨てます。
+
+### `POST /v1/audio/speech`
+
+| フィールド          | 必須 | 説明 |
+|---------------------|------|------|
+| `model`             | ◯    | `GET /v1/models` が返す ID。違う値なら 404 |
+| `input`             | ◯    | 合成するテキスト。4096 文字まで。`{whisper}` などのショートコードは絵文字に展開される |
+| `voice`             | ◯    | 話者 UUID。`{"id": "..."}` の形でも受ける |
+| `response_format`   |      | `mp3`（既定）/ `opus` / `aac` / `flac` / `wav` / `pcm` |
+| `speed`             |      | 0.25 から 4.0、既定 1.0。予測された長さを割る形で効く |
+| `stream_format`     |      | `audio`（既定）または `sse` |
+| `instructions`      |      | 受け付けない。渡すと 400 |
+
+追加フィールド（OpenAI の仕様には無い）:
+
+| フィールド | 説明 |
+|------------|------|
+| `seed` | 乱数の種。省略か負値でランダム。**同じ話者を別のリクエストで同じ声にしたいなら固定する** |
+| `num_steps` | RF のサンプリング回数 |
+| `cfg_scale_text` / `cfg_scale_speaker` | CFG の強さ |
+| `speaker_kv_scale` | 1 より大きくすると話者性が強まる |
+| `truncation_factor` | ノイズの切り詰め。0.8 など |
+| `seconds` | 長さを秒で固定し、長さ予測を上書きする |
+| `min_seconds` / `max_seconds` | 長さ予測の下限と上限。既定 0.5 と 30.0 |
+
+値の決まり方は「ハードコードの既定値、LoRA の `defaults`、リクエスト」の順で後が勝ちます。`num_steps` / `cfg_scale_*` / `speaker_kv_scale` / `truncation_factor` に 0 以下を渡した場合は指定が無かったものとして扱われ、`defaults` の値に戻ります。`speed` だけは上書きではなく、決まった `duration_scale` を割ります。
+
+返るのは音声そのもので、Content-Type は `mp3` が `audio/mpeg`、`opus` が `audio/ogg`、`aac` が `audio/aac`、`flac` が `audio/flac`、`wav` が `audio/wav`、`pcm` が `audio/pcm` です。`pcm` はヘッダを持たないので、OpenAI の約束どおり 24 kHz 16 bit モノラルに揃えて返します。容器を持つ他の五つはモデルのサンプルレートのままで、レートはファイルのヘッダに入ります。
+
+参考情報としてヘッダも付けます。
+
+| ヘッダ | 内容 |
+|--------|------|
+| `X-TTS-Voice-Id` | 使った話者 UUID |
+| `X-TTS-Used-Seed` | 実際に使われた seed。ランダムだったときの値を拾える |
+| `X-TTS-Sample-Rate` | 合成時のサンプルレート |
+
+```bash
+curl -s http://localhost:8765/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "model": "irodori-tts-v4.1-small",
+        "input": "こんにちは、今日はいい天気ですね。",
+        "voice": "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb",
+        "response_format": "wav",
+        "seed": 42
+      }' \
+  -o out.wav
 ```
 
-### `GET /speakers`
+### SSE
 
-登録済み話者の一覧。UUID を拾って `/synth` で使います。
+`stream_format` に `sse` を指定すると `text/event-stream` で返ります。
+
+```
+data: {"type": "speech.audio.delta", "audio": "<base64>"}
+
+data: {"type": "speech.audio.done", "usage": {"input_tokens": 14, "output_tokens": 101, "total_tokens": 115}}
+```
+
+`delta` の中身をつないで base64 を戻すと、`stream_format` を付けずに叩いたときと同じバイト列になります。
+
+ただし**最初の音が出るまでの時間は縮みません**。合成が文全体を一度に作る作りなので、出来上がったファイルを刻んで流しているだけです。頭出しを早くしたいなら、いまのところ文ごとにリクエストを分けてください。
+
+### `GET /v1/models` と `GET /v1/models/{model}`
+
+読み込んでいるモデル 1 つを返します。
+
+```json
+{"object": "list", "data": [{"id": "irodori-tts-v4.1-small", "object": "model", "created": 1757000000, "owned_by": "irodori-tts"}]}
+```
+
+### `GET /v1/audio/voices`
+
+話者一覧です。OpenAI 本家には無く、`voice` に入れる UUID を知るために置いています。
 
 ```json
 {
-  "speakers": [
+  "object": "list",
+  "data": [
     {
-      "uuid": "00000000-0000-0000-0000-000000000000",
-      "name": "<話者表示名>",
-      "defaults": {"num_steps": 40, "cfg_scale_text": 3.0, "cfg_scale_speaker": 5.0}
+      "id": "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb",
+      "object": "voice",
+      "name": "Alice",
+      "cv": null,
+      "category": {"id": "female", "label": "女性"}
     }
   ]
 }
 ```
 
-### `POST /synth`
+### `GET /health`
 
-3 つのモードがあります。`speaker_id` + `text` を送ると **LoRA 単発モード**、`caption` + `text` を送ると **VoiceDesign 単発モード**、`script` を送ると **ドラマモード**（VDS）になります。
-
-#### LoRA 単発モード（speaker_id + text → WAV）
-
-リクエスト:
+OpenAI の仕様外です。コンテナの healthcheck が叩きます。
 
 ```json
-{
-  "speaker_id": "00000000-0000-0000-0000-000000000000",
-  "text": "こんにちは、今日はいい天気ですね。",
-  "seed": 42,
-  "num_steps": 40,
-  "cfg_scale_text": 3.0,
-  "cfg_scale_speaker": 5.0
-}
+{"status": "ok", "model": "irodori-tts-v4.1-small", "voices": 3}
 ```
 
-| フィールド          | 必須 | 説明 |
-|---------------------|------|------|
-| `speaker_id`        | ◯    | `/speakers` で返る UUID |
-| `text`              | ◯    | 合成するテキスト |
-| `seed`              | 任意 | 省略 / `<0` でランダム |
-| `num_steps`         | 任意 | RF サンプリングステップ。省略 / `<=0` で speaker default |
-| `cfg_scale_text`    | 任意 | テキスト CFG scale |
-| `cfg_scale_speaker` | 任意 | 話者 CFG scale |
-| `speaker_kv_scale`  | 任意 | `>1` で話者性を強める |
-| `truncation_factor` | 任意 | 例: `0.8`。ノイズトランケーション |
-| `seconds`           | 任意 | 合成秒数を手動指定。`>0`。指定するとモデルの duration predictor を無視し、`min_seconds` / `max_seconds` でクランプ |
-| `min_seconds`       | 任意 | duration predictor 出力の下限秒。`>0`。デフォルト `0.5`。短文で破綻する場合に引き上げる |
-| `max_seconds`       | 任意 | duration predictor 出力の上限秒。`>0`。デフォルト `30.0` |
-| `duration_scale`    | 任意 | predictor 予測値の倍率。`>0`。デフォルト `1.0` |
+### エラー
 
-省略した項目は LoRA metadata の `defaults` → サーバ内部の既定値 (`num_steps=40`, `cfg_scale_text=3.0`, `cfg_scale_speaker=5.0`, `min_seconds=0.5`, `max_seconds=30.0`, `duration_scale=1.0`) の順にフォールバックします。`seed` も同様にフォールバックし、負値は「ランダム」を意味します。`min_seconds > max_seconds` になる組み合わせ、および `defaults` 由来の `duration_scale` が `0` 以下になる場合は 422 で拒否されます。
-
-レスポンス: `audio/wav` バイナリ。ヘッダに `X-TTS-Speaker-Id` / `X-TTS-Speaker-Name` / `X-TTS-Used-Seed` / `X-TTS-Sample-Rate` が付きます。v3 / v4 系チェックポイントでは duration predictor が長さを決めるため、不要な末尾無音は最小限です（v2 系は 30 秒固定のフォールバック）。
-
-```bash
-# LoRA 単発合成
-curl -s http://localhost:8765/synth \
-  -H 'Content-Type: application/json' \
-  -d '{"speaker_id":"7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb","text":"こんにちは"}' \
-  -o output.wav
-```
-
-#### VoiceDesign 単発モード（caption + text → WAV）
-
-`speaker_id` の代わりに `caption`（自然文による話者記述）を指定します。`speaker_id` と `caption` は**排他**です。caption 対応ベース（v4 系）または別建ての VoiceDesign チェックポイントのどちらも無いサーバでは 501 を返します。
+OpenAI と同じ封筒で返します。SDK はこの中身を見て例外の種類を決めるので、形が揃っていないと `BadRequestError` などに翻訳されません。
 
 ```json
-{
-  "caption": "落ち着いた女性の声で、やわらかく自然に",
-  "text": "こんにちは、今日はいい天気ですね。",
-  "num_steps": 40,
-  "cfg_scale_text": 3.0,
-  "cfg_scale_caption": 4.0
-}
+{"error": {"message": "unknown voice: ...", "type": "invalid_request_error", "param": "voice", "code": "voice_not_found"}}
 ```
 
-| フィールド            | 必須 | 説明 |
-|-----------------------|------|------|
-| `caption`             | ◯    | 自然文による話者記述 |
-| `text`                | ◯    | 合成するテキスト |
-| `cfg_scale_caption`   | 任意 | caption CFG scale（デフォルト `4.0`。公式の VoiceDesign デモに合わせた値） |
-| `seed` / `num_steps` / `cfg_scale_text` / `truncation_factor` | 任意 | LoRA モードと同じ |
-| `seconds` / `min_seconds` / `max_seconds` / `duration_scale` | 任意 | LoRA モードと同じ duration 制御 |
+| 状況 | ステータス | `code` |
+|------|-----------|--------|
+| `model` が一致しない | 404 | `model_not_found` |
+| `voice` が未登録 | 400 | `voice_not_found` |
+| 値の検証に落ちた（空の `input`、範囲外の `speed` など） | 400 | なし |
+| 合成そのものが失敗 | 500 | なし（`type` は `server_error`） |
 
-`speaker_kv_scale` / `cfg_scale_speaker` は VoiceDesign モードでは無視されます。
+### 公式 SDK から
 
-```bash
-# VoiceDesign 単発合成
-curl -s http://localhost:8765/synth \
-  -H 'Content-Type: application/json' \
-  -d '{"caption":"落ち着いた女性の声","text":"こんにちは"}' \
-  -o output.wav
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8765/v1", api_key="not-checked")
+
+response = client.audio.speech.create(
+    model="irodori-tts-v4.1-small",
+    voice="7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb",
+    input="こんにちは、今日はいい天気ですね。",
+    response_format="wav",
+    extra_body={"seed": 42},
+)
+response.write_to_file("out.wav")
 ```
-
-#### ドラマモード（VDS-JSON → PCM ストリーム / WAV）
-
-`script` フィールドに VDS-JSON オブジェクトを渡すと、複数話者・複数セリフの台本を一括合成します。フォーマットの詳細は `docs/VDS.md` を参照。
-
-出力形式は `Accept` ヘッダーで切り替えます:
-
-| Accept ヘッダー | 出力 | 用途 |
-|---|---|---|
-| `audio/pcm`（デフォルト） | 生 PCM16 mono ストリーム。cue ごとに逐次送出 | Discord Bot（低レイテンシ再生） |
-| `audio/wav` | 全 cue を合成後、gap/pause 込みの結合 WAV を返す | ダウンロード・プレビュー |
-
-レスポンスヘッダーに `X-TTS-Sample-Rate`（PCM のサンプルレート）と `X-TTS-Cue-Count`（speech cue 数）が付きます。
-
-```bash
-# ドラマ — PCM ストリーム（デフォルト）
-curl -s http://localhost:8765/synth \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "script": {
-      "version": 1,
-      "defaults": {"num_steps": 40, "gap": 0.3},
-      "speakers": {
-        "alice": {"type": "lora", "uuid": "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb"},
-        "bob":   {"type": "lora", "uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}
-      },
-      "cues": [
-        {"kind": "speech", "speaker": "alice", "text": "おはよう。"},
-        {"kind": "speech", "speaker": "bob",   "text": "おはようございます。"},
-        {"kind": "pause",  "duration": 1.0},
-        {"kind": "speech", "speaker": "alice", "text": "今日はいい天気ですね。"}
-      ]
-    }
-  }' \
-  -o output.pcm
-
-# PCM → WAV 変換（ffmpeg）
-ffmpeg -f s16le -ar 24000 -ac 1 -i output.pcm output.wav
-```
-
-```bash
-# ドラマ — 結合 WAV
-curl -s http://localhost:8765/synth \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: audio/wav' \
-  -d '{
-    "script": {
-      "version": 1,
-      "speakers": {
-        "alice": {"type": "lora", "uuid": "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb"}
-      },
-      "cues": [
-        {"kind": "speech", "speaker": "alice", "text": "おはようございます。"},
-        {"kind": "pause",  "duration": 0.5},
-        {"kind": "speech", "speaker": "alice", "text": "今日はいい天気ですね。"}
-      ]
-    }
-  }' \
-  -o drama.wav
-```
-
-### `POST /synth/vds`
-
-`.vds` テキストファイルのアップロードによるドラマ合成。出力形式は `/synth` のドラマモードと同じく `Accept` ヘッダーで切り替えます。
-
-```bash
-# .vds ファイル → PCM ストリーム
-curl -s http://localhost:8765/synth/vds \
-  -F 'file=@script.vds' \
-  -o output.pcm
-
-# .vds ファイル → 結合 WAV
-curl -s http://localhost:8765/synth/vds \
-  -H 'Accept: audio/wav' \
-  -F 'file=@script.vds' \
-  -o drama.wav
-```
-
----
 
 ## 7. 新しい話者の追加フロー
 
@@ -336,7 +293,7 @@ curl -s http://localhost:8765/synth/vds \
 3. `scripts/lora/export_lora_to_safetensors.py` で `.safetensors` にエクスポートし、`speaker.label` 由来の `name` と `--defaults` を埋め込む。
 4. `.safetensors` を `models/LoRA/` に置く。
 5. サーバを再起動（`docker compose restart tts` など）。
-6. `GET /speakers` で新 UUID を確認、`POST /synth` で動作確認。
+6. `GET /v1/audio/voices` で新 UUID を確認、`POST /v1/audio/speech` で動作確認。
 
 ---
 
@@ -346,7 +303,8 @@ curl -s http://localhost:8765/synth/vds \
 |------------------------------------------------------|------|
 | 起動時 `lora_dir does not exist`                     | `lora_dir` の解決先を確認。Docker なら `./models/LoRA` が正しくマウントされているか |
 | `skipping non-LoRA safetensors file`                 | `format=irodori-tts-lora/v1` が入っていない。`export_lora_to_safetensors.py` 経由で書き出す |
-| 話者一覧に出ているのに `/synth` が 404 を返す         | UUID をコピペミスしていないか確認（`/speakers` の値をそのまま使う） |
+| 話者一覧に出ているのに `voice` が 400 になる           | UUID をコピペミスしていないか確認（`/v1/audio/voices` の値をそのまま使う） |
+| `model_not_found` が返る                             | `GET /v1/models` の `id` をそのまま `model` に入れる。`tts-1` は通らない |
 | GPU を認識しない                                     | `--gpus all` / compose の `deploy.resources.reservations.devices` を確認 |
 | ベースモデル pull で 401/403                         | private repo の場合は `HF_TOKEN` を環境変数に入れる |
 | 音質が学習時サンプルより悪い                         | `defaults` の `num_steps` / `cfg_scale_*` を調整、または別の checkpoint をエクスポートし直す |

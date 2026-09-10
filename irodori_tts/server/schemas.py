@@ -1,223 +1,93 @@
-"""Request schemas for the TTS server and speaker-defaults merging."""
+"""Request schema for POST /v1/audio/speech and speaker-defaults merging."""
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
-from fastapi import HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-# ---------------------------------------------------------------------------
-# VDS-JSON schema models (OpenAPI documentation)
-# ---------------------------------------------------------------------------
+from irodori_tts.server.errors import ApiError
+
+MAX_INPUT_CHARS = 4096
 
 
-class VdsLoraSpeaker(BaseModel):
-    type: Literal["lora"]
-    uuid: str = Field(
+class VoiceRef(BaseModel):
+    """The object form of ``voice`` that the API also accepts."""
+
+    id: str = Field(..., description="Speaker UUID.")
+
+
+class SpeechRequest(BaseModel):
+    # `model` would otherwise collide with pydantic's own protected prefix.
+    model_config = ConfigDict(protected_namespaces=())
+
+    model: str = Field(
         ...,
-        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-        description="Speaker LoRA adapter UUID.",
-        examples=["7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb"],
+        description="Model id, as listed by GET /v1/models.",
+        examples=["irodori-tts-v4.1-small"],
     )
-
-
-class VdsCaptionSpeaker(BaseModel):
-    type: Literal["caption"]
-    caption: str = Field(
+    input: str = Field(
         ...,
         min_length=1,
-        description="Natural-language voice description for VoiceDesign synthesis.",
-        examples=["落ち着いた女性の声で、やわらかく自然に"],
+        max_length=MAX_INPUT_CHARS,
+        description="Text to synthesize. Supports {shortcode} emoji annotations.",
+        examples=["こんにちは、今日はいい天気ですね。"],
+    )
+    voice: str | VoiceRef = Field(
+        ...,
+        description="Speaker UUID, as listed by GET /v1/audio/voices.",
+        examples=["7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb"],
+    )
+    response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = Field(
+        default="mp3",
+        description="Audio format. pcm is 24 kHz 16-bit mono, headerless.",
+    )
+    speed: float = Field(
+        default=1.0,
+        ge=0.25,
+        le=4.0,
+        description="Playback rate multiplier applied to the predicted duration.",
+    )
+    stream_format: Literal["audio", "sse"] = Field(
+        default="audio",
+        description="audio returns the encoded file; sse streams speech.audio.* events.",
+    )
+    instructions: str | None = Field(
+        default=None,
+        description="Not supported by this server: voice design was removed.",
     )
 
-
-VdsSpeakerRef = Annotated[
-    VdsLoraSpeaker | VdsCaptionSpeaker,
-    Field(discriminator="type"),
-]
-
-
-class VdsSynthOptions(BaseModel):
-    seed: int | None = Field(default=None, description="Sampling seed.")
+    # --- Extensions. Not part of the OpenAI schema; pass them via extra_body. ---
+    seed: int | None = Field(
+        default=None,
+        description="Sampling seed. Omit or set <0 for random. Fix it to keep one "
+        "speaker sounding the same across separate requests.",
+    )
     num_steps: int | None = Field(default=None, description="RF sampling steps.")
     cfg_scale_text: float | None = Field(default=None, description="Text CFG scale.")
     cfg_scale_speaker: float | None = Field(default=None, description="Speaker CFG scale.")
-    speaker_kv_scale: float | None = Field(default=None, description="Speaker KV scale.")
-    truncation_factor: float | None = Field(default=None, description="Noise truncation factor.")
-    seconds: float | None = Field(
-        default=None,
-        gt=0,
-        description="Manual synthesis duration in seconds (overrides the duration predictor).",
-    )
-    min_seconds: float | None = Field(
-        default=None,
-        gt=0,
-        description="Lower bound for the duration predictor output (default 0.5).",
-    )
-    max_seconds: float | None = Field(
-        default=None,
-        gt=0,
-        description="Upper bound for the duration predictor output (default 30.0).",
-    )
-    duration_scale: float | None = Field(
-        default=None,
-        gt=0,
-        description="Multiplier applied to the predicted duration (default 1.0).",
-    )
-
-
-class VdsSpeechCue(BaseModel):
-    kind: Literal["speech"]
-    speaker: str = Field(..., description="Speaker alias defined in the speakers map.")
-    text: str = Field(
-        ...,
-        min_length=1,
-        description="Text to synthesize. Supports {shortcode} emoji annotations.",
-    )
-    options: VdsSynthOptions | None = Field(
-        default=None,
-        description="Per-cue synthesis parameter overrides.",
-    )
-
-
-class VdsPauseCue(BaseModel):
-    kind: Literal["pause"]
-    duration: float = Field(..., gt=0, description="Pause duration in seconds.")
-
-
-class VdsSceneCue(BaseModel):
-    kind: Literal["scene"]
-    name: str = Field(..., min_length=1, description="Scene marker name (not synthesized).")
-
-
-VdsCue = Annotated[
-    VdsSpeechCue | VdsPauseCue | VdsSceneCue,
-    Field(discriminator="kind"),
-]
-
-
-class VdsDefaults(BaseModel):
-    gap: float = Field(
-        default=1.0,
-        ge=0,
-        description="Gap between consecutive speech cues in seconds.",
-    )
-    num_steps: int | None = Field(default=None, description="Default RF sampling steps.")
-    cfg_scale_text: float | None = Field(default=None, description="Default text CFG scale.")
-    cfg_scale_speaker: float | None = Field(default=None, description="Default speaker CFG scale.")
-    speaker_kv_scale: float | None = Field(default=None, description="Default speaker KV scale.")
-    truncation_factor: float | None = Field(
-        default=None, description="Default noise truncation factor."
-    )
-    seed: int | None = Field(default=None, description="Default sampling seed.")
-    seconds: float | None = Field(
-        default=None,
-        gt=0,
-        description="Default manual synthesis duration in seconds (overrides the predictor).",
-    )
-    min_seconds: float | None = Field(
-        default=None,
-        gt=0,
-        description="Default lower bound for the duration predictor output.",
-    )
-    max_seconds: float | None = Field(
-        default=None,
-        gt=0,
-        description="Default upper bound for the duration predictor output.",
-    )
-    duration_scale: float | None = Field(
-        default=None,
-        gt=0,
-        description="Default multiplier applied to the predicted duration.",
-    )
-
-
-class VdsScriptBody(BaseModel):
-    version: Literal[1] = Field(..., description="VDS format version. Must be 1.")
-    title: str | None = Field(default=None, description="Script title.")
-    defaults: VdsDefaults | None = Field(
-        default=None,
-        description="Default synthesis parameters applied to all cues.",
-    )
-    speakers: dict[str, VdsSpeakerRef] = Field(
-        ...,
-        description="Map of speaker aliases to speaker definitions (LoRA UUID or VoiceDesign caption).",
-    )
-    cues: list[VdsCue] = Field(
-        ...,
-        description="Ordered list of cues to synthesize.",
-    )
-
-
-class SynthRequest(BaseModel):
-    speaker_id: str | None = Field(
-        default=None,
-        description="Registered speaker UUID. Required for single-cue mode.",
-        examples=["7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb"],
-    )
-    text: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Text to synthesize. Required for single-cue mode.",
-        examples=["こんにちは、今日はいい天気ですね。"],
-    )
-    seed: int | None = Field(default=None, description="Sampling seed. Omit or set <0 for random.")
-    num_steps: int | None = Field(
-        default=None, description="RF sampling steps. Omit or set <=0 to use speaker default."
-    )
-    cfg_scale_text: float | None = Field(
-        default=None, description="Text CFG scale. Omit or set <=0 to use speaker default."
-    )
-    cfg_scale_speaker: float | None = Field(
-        default=None, description="Speaker CFG scale. Omit or set <=0 to use speaker default."
-    )
-    caption: str | None = Field(
-        default=None,
-        description="Natural-language voice description for VoiceDesign mode. "
-        "Alternative to speaker_id (mutually exclusive).",
-        examples=["落ち着いた女性の声で、やわらかく自然に"],
-    )
-    cfg_scale_caption: float | None = Field(
-        default=None, description="Caption CFG scale (VoiceDesign mode). Default 4.0."
-    )
     speaker_kv_scale: float | None = Field(
-        default=None,
-        description="Speaker KV scale (>1 strengthens identity). Omit or set <=0 to disable.",
+        default=None, description="Speaker KV scale (>1 strengthens identity)."
     )
     truncation_factor: float | None = Field(
-        default=None, description="Noise truncation (e.g. 0.8). Omit or set <=0 to disable."
-    )
-    script: VdsScriptBody | None = Field(
-        default=None,
-        description="VDS-JSON script object for drama mode. "
-        "If provided, speaker_id/text/caption are ignored.",
+        default=None, description="Noise truncation, e.g. 0.8. Omit or set <=0 to disable."
     )
     seconds: float | None = Field(
-        default=None,
-        gt=0,
-        description="Manual synthesis duration in seconds. "
-        "When set, overrides the duration predictor; clamped by min/max_seconds.",
+        default=None, gt=0, description="Fixed duration, overriding the duration predictor."
     )
     min_seconds: float | None = Field(
-        default=None,
-        gt=0,
-        description="Lower bound for the duration predictor output. "
-        "Default 0.5s. Useful when very short text yields too-short audio.",
+        default=None, gt=0, description="Lower bound for the predicted duration. Default 0.5."
     )
     max_seconds: float | None = Field(
-        default=None,
-        gt=0,
-        description="Upper bound for the duration predictor output. Default 30.0s.",
+        default=None, gt=0, description="Upper bound for the predicted duration. Default 30.0."
     )
-    duration_scale: float | None = Field(
-        default=None,
-        gt=0,
-        description="Multiplier applied to the predicted duration. Default 1.0.",
-    )
+
+    @property
+    def voice_id(self) -> str:
+        return self.voice.id if isinstance(self.voice, VoiceRef) else self.voice
 
     @model_validator(mode="after")
-    def _check_duration_bounds(self) -> SynthRequest:
+    def _check_duration_bounds(self) -> SpeechRequest:
         if (
             self.min_seconds is not None
             and self.max_seconds is not None
@@ -238,7 +108,7 @@ _POSITIVE_ONLY = {
 }
 
 
-def _merge_defaults(req: SynthRequest, defaults: dict[str, Any]) -> dict[str, Any]:
+def _merge_defaults(req: SpeechRequest, defaults: dict[str, Any]) -> dict[str, Any]:
     resolved: dict[str, Any] = {
         "num_steps": 40,
         "cfg_scale_text": 3.0,
@@ -265,23 +135,19 @@ def _merge_defaults(req: SynthRequest, defaults: dict[str, Any]) -> dict[str, An
     seed = resolved["seed"]
     resolved["seed"] = int(seed) if seed is not None and int(seed) >= 0 else None
     if resolved["duration_scale"] is not None and float(resolved["duration_scale"]) <= 0:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"resolved duration_scale ({resolved['duration_scale']}) must be > 0 "
-                "after merging speaker defaults"
-            ),
+        raise ApiError(
+            f"resolved duration_scale ({resolved['duration_scale']}) must be > 0 "
+            "after merging speaker defaults",
+            param="voice",
         )
     if (
         resolved["min_seconds"] is not None
         and resolved["max_seconds"] is not None
         and float(resolved["min_seconds"]) > float(resolved["max_seconds"])
     ):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"resolved min_seconds ({resolved['min_seconds']}) > "
-                f"max_seconds ({resolved['max_seconds']}) after merging speaker defaults"
-            ),
+        raise ApiError(
+            f"resolved min_seconds ({resolved['min_seconds']}) > "
+            f"max_seconds ({resolved['max_seconds']}) after merging speaker defaults",
+            param="min_seconds",
         )
     return resolved
