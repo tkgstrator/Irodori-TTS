@@ -6,7 +6,7 @@
 
 Training and inference code for **Irodori-TTS**, a Flow Matching-based Text-to-Speech model. The architecture and training design largely follow [Echo-TTS](https://jordandarefsky.com/blog/2025/echo/), using [DACVAE](https://github.com/facebookresearch/dacvae) continuous latents as the generation target.
 
-For an OpenAI-compatible inference API server, see [Irodori-TTS-Server](https://github.com/Aratako/Irodori-TTS-Server).
+`server.py` serves trained speaker LoRAs over an OpenAI-compatible speech API (`POST /v1/audio/speech`), so the official OpenAI SDKs work against it unchanged. See [docs/SERVER.md](docs/SERVER.md).
 
 > [!IMPORTANT]
 > `main` tracks the **v4** codebase and is intended for use with the unified **Irodori-TTS-v4.1-Small** release.

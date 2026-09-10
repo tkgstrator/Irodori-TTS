@@ -16,8 +16,9 @@
 # from the host through --gpus all / the compose device reservation.
 #
 # git stays because two dependencies (dacvae, silentcipher) are git URLs that
-# uv clones at sync time; ffmpeg stays because torchcodec dlopens libav* to
-# write WAV.
+# uv clones at sync time; ffmpeg stays because torchcodec dlopens libav* at
+# import time, and because response_format=aac shells out to it — libsndfile
+# writes the other five formats but has never supported AAC.
 #
 # Everything else is supplied by the user via bind mounts:
 #   - /app/config.yaml              (server config YAML)
