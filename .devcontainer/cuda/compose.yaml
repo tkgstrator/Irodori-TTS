@@ -1,3 +1,8 @@
+# Compose はこのファイルの親ディレクトリ名からプロジェクト名を決めるため、
+# 何も指定しないと "cuda" になる。他リポジトリの .devcontainer/cuda/ と衝突し、
+# 別プロジェクトのコンテナやボリュームが同じ名前空間に同居してしまうので固定する。
+name: irodori-tts-cuda
+
 services:
   app:
     build:
