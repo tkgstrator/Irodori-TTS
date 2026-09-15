@@ -97,8 +97,9 @@ class TestVoices:
                 "id": UUID_A,
                 "object": "voice",
                 "name": "Alice",
-                "cv": None,
-                "category": {"id": None, "label": None},
+                "cv": "Alice Actor",
+                "category": {"id": "female", "label": "女性"},
+                "defaults": {"num_steps": 30},
             }
         ]
 
