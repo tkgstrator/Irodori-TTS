@@ -61,7 +61,7 @@ lora_dir: models/LoRA
 | `show_timings`               | 合成のステージ別タイミングをログ出力（デフォルト `true`） |
 | `lora_dir`                   | `.safetensors` LoRA を探すディレクトリ |
 
-`speakers:` ブロックを使った手動登録もまだサポートされていますが、`lora_dir` による auto-discover が標準ルートです。
+話者は `lora_dir` に置かれた LoRA から自動検出されます。
 
 ---
 
@@ -239,8 +239,9 @@ data: {"type": "speech.audio.done", "usage": {"input_tokens": 14, "output_tokens
       "id": "7c9e6a55-5b6a-4a4d-9c49-1d5a3b2f6cbb",
       "object": "voice",
       "name": "Alice",
-      "cv": null,
-      "category": {"id": "female", "label": "女性"}
+      "cv": "Alice Actor",
+      "category": {"id": "female", "label": "女性"},
+      "defaults": {"num_steps": 30}
     }
   ]
 }
