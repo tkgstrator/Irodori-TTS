@@ -78,6 +78,7 @@ def build_app(cfg_path: Path, *, eager_load: bool = True) -> FastAPI:
                     "name": s.name,
                     "cv": s.cv,
                     "category": {"id": s.category_id, "label": s.category_label},
+                    "defaults": s.defaults,
                 }
                 for s in registry.list_speakers()
             ],

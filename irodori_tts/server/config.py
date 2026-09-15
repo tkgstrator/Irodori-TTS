@@ -176,20 +176,6 @@ def load_config(path: Path) -> ServerConfig:
             lora_dir = (path.parent / lora_dir).resolve() if not lora_dir.exists() else lora_dir
         speakers.extend(_discover_lora_dir(lora_dir))
 
-    speakers.extend(
-        SpeakerSpec(
-            uuid=str(s["uuid"]),
-            name=str(s["name"]),
-            adapter=str(s["adapter"]),
-            defaults=dict(s.get("defaults") or {}),
-            category_id=(str(s["category_id"]).strip() or None) if s.get("category_id") else None,
-            category_label=(str(s["category_label"]).strip() or None)
-            if s.get("category_label")
-            else None,
-        )
-        for s in raw.get("speakers") or []
-    )
-
     base_hf_repo = _resolve_base_repo(raw)
     return ServerConfig(
         base_checkpoint=(str(raw["base_checkpoint"]) if raw.get("base_checkpoint") else None),

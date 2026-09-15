@@ -34,10 +34,8 @@ from irodori_tts.server.registry import RuntimeRegistry
 from irodori_tts.server.schemas import SpeechRequest, _merge_defaults
 from tests.helpers import (
     UUID_A,
-    UUID_B,
     install_fake_runtime,
     lora_test_config,
-    speaker_entry,
     write_config,
     write_lora,
 )
@@ -150,72 +148,6 @@ class TestModelId:
         assert cfg.model_id == "custom"
 
 
-class TestLoadConfigSpeakers:
-    def test_inline_speaker_fields(self, tmp_path: Path):
-        cfg = load_config(
-            write_config(
-                tmp_path / "c.yaml",
-                {
-                    "speakers": [
-                        speaker_entry(
-                            defaults={"num_steps": 30},
-                            category_id=" cat ",
-                            category_label=" Cat ",
-                        )
-                    ]
-                },
-            )
-        )
-        (spec,) = cfg.speakers
-        assert spec == SpeakerSpec(
-            uuid=UUID_A,
-            name="Alice",
-            adapter="/models/alice.safetensors",
-            defaults={"num_steps": 30},
-            category_id="cat",
-            category_label="Cat",
-            cv=None,
-        )
-
-    def test_optional_speaker_fields_default_to_none(self, tmp_path: Path):
-        cfg = load_config(write_config(tmp_path / "c.yaml", {"speakers": [speaker_entry()]}))
-        (spec,) = cfg.speakers
-        assert spec.defaults == {}
-        assert spec.category_id is None
-        assert spec.category_label is None
-        assert spec.cv is None
-
-    def test_whitespace_only_category_collapses_to_none(self, tmp_path: Path):
-        cfg = load_config(
-            write_config(
-                tmp_path / "c.yaml",
-                {"speakers": [speaker_entry(category_id="   ", category_label="  ")]},
-            )
-        )
-        (spec,) = cfg.speakers
-        assert spec.category_id is None
-        assert spec.category_label is None
-
-    def test_cv_is_not_readable_from_yaml(self, tmp_path: Path):
-        """``cv`` is only populated from LoRA metadata; the YAML key is ignored."""
-        cfg = load_config(
-            write_config(tmp_path / "c.yaml", {"speakers": [speaker_entry(cv="CV Name")]})
-        )
-        assert cfg.speakers[0].cv is None
-
-    @pytest.mark.parametrize("missing", ["uuid", "name", "adapter"])
-    def test_missing_required_speaker_key_raises(self, tmp_path: Path, missing: str):
-        entry = speaker_entry()
-        del entry[missing]
-        path = write_config(tmp_path / "c.yaml", {"speakers": [entry]})
-        with pytest.raises(KeyError, match=missing):
-            load_config(path)
-
-    def test_null_speakers_list_is_empty(self, tmp_path: Path):
-        cfg = load_config(write_config(tmp_path / "c.yaml", {"speakers": None}))
-        assert cfg.speakers == []
-
-
 class TestLoadConfigErrors:
     def test_missing_file(self, tmp_path: Path):
         with pytest.raises(FileNotFoundError):
@@ -236,7 +168,7 @@ class TestLoadConfigErrors:
 
     def test_malformed_yaml(self, tmp_path: Path):
         path = tmp_path / "c.yaml"
-        path.write_text("speakers: [\n", encoding="utf-8")
+        path.write_text("lora_dir: [\n", encoding="utf-8")
         with pytest.raises(yaml.YAMLError):
             load_config(path)
 
@@ -396,18 +328,6 @@ class TestLoadConfigLoraDir:
         monkeypatch.chdir(cwd)
         cfg = load_config(write_config(conf_dir / "c.yaml", {"lora_dir": "loras"}))
         assert [s.name for s in cfg.speakers] == ["from_cwd"]
-
-    def test_discovered_speakers_come_before_inline_speakers(self, tmp_path: Path):
-        lora_dir = tmp_path / "loras"
-        lora_dir.mkdir()
-        write_lora(lora_dir / "zzz.safetensors", {"name": "Discovered", "uuid": UUID_B})
-        cfg = load_config(
-            write_config(
-                tmp_path / "c.yaml",
-                {"lora_dir": str(lora_dir), "speakers": [speaker_entry()]},
-            )
-        )
-        assert [s.name for s in cfg.speakers] == ["Discovered", "Alice"]
 
     def test_falsy_lora_dir_is_skipped(self, tmp_path: Path):
         cfg = load_config(write_config(tmp_path / "c.yaml", {"lora_dir": ""}))

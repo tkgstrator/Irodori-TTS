@@ -176,8 +176,7 @@ Recommended next actions:
     --defaults '{"num_steps": 40, "cfg_scale_text": 3.0, "cfg_scale_speaker": 5.0}'
   ```
 
-  The server auto-discovers every `*.safetensors` under `lora_dir` (`models/LoRA`) at startup — name, UUID and inference defaults ride along in the file's own metadata, so **no entry in `configs/runtime.yaml` is needed**. The display name comes from `data/<speaker>/config.yaml`'s `speaker.label`; `--name` is only a fallback when that is absent, and `--uuid` is derived deterministically from the output filename when omitted. Restart the server to pick the file up, then confirm via `GET /speakers`.
-- A manual `speakers:` list in `configs/runtime.yaml` (`uuid` / `name` / `adapter` / `defaults` / `category_id` / `category_label`) is still honored and is appended after auto-discovery, but it is the legacy path. Use it only if the user asks for it explicitly.
+  The server auto-discovers every `*.safetensors` under `lora_dir` (`models/LoRA`) at startup — name, UUID and inference defaults ride along in the file's own metadata, so **no entry in `configs/runtime.yaml` is needed**. The display name comes from `data/<speaker>/config.yaml`'s `speaker.label`; `--name` is only a fallback when that is absent, and `--uuid` is derived deterministically from the output filename when omitted. Restart the server to pick the file up, then confirm via `GET /v1/audio/voices`.
 - Sanity-check quality before exporting with `PYTHONPATH=. uv run python scripts/lora/infer_with_adapter.py --base <base>.safetensors --adapter outputs/<speaker>_lora/<checkpoint_dir> --text "..." --no-ref --output sample.wav` (this script needs `PYTHONPATH=.`). `--base` must be the same generation the adapter was trained on. Be aware this script has **no `--caption` flag**, so it cannot exercise v4's caption branch; use it for text and reference checks only.
 - Merged safetensors are not needed; the server loads base + LoRA directly.
 

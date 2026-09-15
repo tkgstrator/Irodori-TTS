@@ -34,12 +34,6 @@ def write_lora(path: Path, metadata: dict[str, str] | None = None) -> Path:
     return path
 
 
-def speaker_entry(**overrides: Any) -> dict[str, Any]:
-    entry = {"uuid": UUID_A, "name": "Alice", "adapter": "/models/alice.safetensors"}
-    entry.update(overrides)
-    return entry
-
-
 class FakeTokenizer:
     def encode(self, text: str) -> torch.Tensor:
         return torch.zeros(len(text))
@@ -96,7 +90,17 @@ def lora_test_config(tmp_path: Path, **extra: Any) -> Path:
     ckpt.write_text("x", encoding="utf-8")
     lora_dir = tmp_path / "loras"
     lora_dir.mkdir()
-    write_lora(lora_dir / "alice.safetensors", {"name": "Alice", "uuid": UUID_A})
+    write_lora(
+        lora_dir / "alice.safetensors",
+        {
+            "name": "Alice",
+            "uuid": UUID_A,
+            "speaker.cv": "Alice Actor",
+            "category.id": "female",
+            "category.label": "女性",
+            "defaults": '{"num_steps": 30}',
+        },
+    )
     data: dict[str, Any] = {"base_checkpoint": str(ckpt), "lora_dir": str(lora_dir)}
     data.update(extra)
     return write_config(tmp_path / "c.yaml", data)
