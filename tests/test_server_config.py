@@ -383,7 +383,8 @@ class TestRuntimeLoad:
         registry = RuntimeRegistry(load_config(lora_test_config(tmp_path)))
         registry.load()
         assert len(calls["base"]) == 1
-        assert registry.acquire(UUID_A)[1].name == "Alice"
+        with registry.acquire(UUID_A) as (_, spec):
+            assert spec.name == "Alice"
 
     def test_no_speakers_loads_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Every voice is a LoRA, so a base with none attached has nothing to say."""
@@ -394,8 +395,8 @@ class TestRuntimeLoad:
         registry = RuntimeRegistry(load_config(path))
         registry.load()
         assert calls["base"] == []
-        with pytest.raises(KeyError):
-            registry.acquire(UUID_A)
+        with pytest.raises(KeyError), registry.acquire(UUID_A):
+            pass
 
     def test_watermarking_is_left_on_by_default(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -403,8 +404,8 @@ class TestRuntimeLoad:
         install_fake_runtime(monkeypatch)
         registry = RuntimeRegistry(load_config(lora_test_config(tmp_path)))
         registry.load()
-        base, _ = registry.acquire(UUID_A)
-        assert base.watermarker.model is not None
+        with registry.acquire(UUID_A) as (base, _):
+            assert base.watermarker.model is not None
 
     def test_disabling_the_watermark_drops_the_backend(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -413,13 +414,13 @@ class TestRuntimeLoad:
         path = lora_test_config(tmp_path, enable_watermark=False)
         registry = RuntimeRegistry(load_config(path))
         registry.load()
-        base, _ = registry.acquire(UUID_A)
-        assert base.watermarker.model is None
+        with registry.acquire(UUID_A) as (base, _):
+            assert base.watermarker.model is None
 
     def test_unloaded_registry_refuses_to_acquire(self, tmp_path: Path):
         registry = RuntimeRegistry(load_config(lora_test_config(tmp_path)))
-        with pytest.raises(RuntimeError, match="not loaded"):
-            registry.acquire(UUID_A)
+        with pytest.raises(RuntimeError, match="not loaded"), registry.acquire(UUID_A):
+            pass
 
 
 # ===================================================================
