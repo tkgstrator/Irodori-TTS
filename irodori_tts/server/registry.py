@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from irodori_tts.inference_runtime import InferenceRuntime, RuntimeKey
 from irodori_tts.server.config import ServerConfig, SpeakerSpec, resolve_base_checkpoint
@@ -117,10 +119,24 @@ class RuntimeRegistry:
             logger.info("Watermarking disabled by config")
             self._runtime.watermarker.model = None
 
-    def acquire(self, uuid: str) -> tuple[InferenceRuntime, SpeakerSpec]:
+    @contextmanager
+    def acquire(self, uuid: str) -> Iterator[tuple[InferenceRuntime, SpeakerSpec]]:
+        """Activate `uuid`'s adapter and hold the runtime exclusively for the
+        whole `with` block.
+
+        The runtime is a single instance shared by every speaker — only the
+        active LoRA adapter differs — so the lock must stay held through the
+        entire synthesis call. Releasing it right after set_active_adapter()
+        (as a plain getter would) lets a concurrent request swap the adapter
+        mid-inference: the in-flight request ends up speaking as whichever
+        speaker most recently grabbed the lock, and the underlying HF
+        tokenizer (not reentrant) can also throw "Already borrowed" under the
+        same race. Callers must do their synthesis inside this block, never
+        after it returns.
+        """
         spec = self.get_spec(uuid)
         if self._runtime is None:
             raise RuntimeError("Registry not loaded. Call load() first.")
         with self._lock:
             self._runtime.set_active_adapter(uuid)
-            return self._runtime, spec
+            yield self._runtime, spec
