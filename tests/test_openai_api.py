@@ -10,6 +10,8 @@ from __future__ import annotations
 import base64
 import json
 import shutil
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -286,16 +288,10 @@ class TestOpenApiContract:
         assert set(content) >= {"audio/mpeg", "audio/wav", "audio/pcm", "text/event-stream"}
 
 
-@pytest.fixture
-def live_url(tmp_path: Path, calls: dict[str, Any]) -> Any:
-    """A real socket. httpx2's ASGITransport is async-only, and the SDK is sync."""
-    del calls
-    import threading
-    import time
-
+def _start_live_server(tmp_path: Path, *, extra_speaker: bool = False) -> tuple[Any, threading.Thread, int]:
     import uvicorn
 
-    app = build_app(lora_test_config(tmp_path), eager_load=True)
+    app = build_app(lora_test_config(tmp_path, extra_speaker=extra_speaker), eager_load=True)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -305,6 +301,25 @@ def live_url(tmp_path: Path, calls: dict[str, Any]) -> Any:
             raise RuntimeError("uvicorn did not start")
         time.sleep(0.01)
     port = server.servers[0].sockets[0].getsockname()[1]
+    return server, thread, port
+
+
+@pytest.fixture
+def live_url(tmp_path: Path, calls: dict[str, Any]) -> Any:
+    """A real socket. httpx2's ASGITransport is async-only, and the SDK is sync."""
+    del calls
+    server, thread, port = _start_live_server(tmp_path)
+    yield f"http://127.0.0.1:{port}/v1"
+    server.should_exit = True
+    thread.join(timeout=5)
+
+
+@pytest.fixture
+def live_url_two_speakers(tmp_path: Path, calls: dict[str, Any]) -> Any:
+    """Same as `live_url`, but with two discoverable speakers (Alice/Bob) so
+    concurrency tests have a second voice to race against the first."""
+    del calls
+    server, thread, port = _start_live_server(tmp_path, extra_speaker=True)
     yield f"http://127.0.0.1:{port}/v1"
     server.should_exit = True
     thread.join(timeout=5)
@@ -346,3 +361,67 @@ class TestOfficialSdk:
         with pytest.raises(openai.BadRequestError) as excinfo:
             sdk.audio.speech.create(model=MODEL, voice=UUID_B, input="hi")
         assert excinfo.value.param == "voice"
+
+
+class TestConcurrentSpeech:
+    """The runtime is a single instance shared across every speaker — only the
+    active adapter differs. registry.acquire() must hold its lock through the
+    whole synthesis call, or a concurrent request's adapter switch bleeds into
+    an in-flight one and the wrong voice ends up speaking."""
+
+    def test_a_concurrent_request_cannot_swap_the_adapter_mid_synthesis(
+        self, live_url_two_speakers: str, calls: dict[str, Any]
+    ):
+        import httpx
+
+        runtime = calls["made"]["base"]
+        a_reached_synthesis = threading.Event()
+        release_a = threading.Event()
+        adapter_seen_by_a: list[str] = []
+
+        def on_synthesize(rt: Any) -> None:
+            if rt.last_request.text != "こんにちは":
+                return  # request B: let it run straight through
+            a_reached_synthesis.set()
+            release_a.wait(timeout=5)
+            adapter_seen_by_a.append(rt.active_adapter)
+
+        runtime.on_synthesize = on_synthesize
+
+        results: dict[str, int] = {}
+
+        def call_a() -> None:
+            response = httpx.post(
+                f"{live_url_two_speakers}/audio/speech", json=speech_body(voice=UUID_A), timeout=10
+            )
+            results["a_status"] = response.status_code
+
+        def call_b() -> None:
+            assert a_reached_synthesis.wait(timeout=5), "request A never reached synthesis"
+            # Give request B a moment to actually reach (and, once the fix is in
+            # place, block on) the registry lock before request A is released.
+            time.sleep(0.2)
+            response = httpx.post(
+                f"{live_url_two_speakers}/audio/speech",
+                json=speech_body(voice=UUID_B, input="hi"),
+                timeout=10,
+            )
+            results["b_status"] = response.status_code
+
+        thread_a = threading.Thread(target=call_a)
+        thread_b = threading.Thread(target=call_b)
+        thread_a.start()
+        thread_b.start()
+
+        assert a_reached_synthesis.wait(timeout=5), "request A never reached synthesis"
+        time.sleep(0.3)
+        release_a.set()
+
+        thread_a.join(timeout=5)
+        thread_b.join(timeout=5)
+
+        assert results.get("a_status") == 200
+        assert results.get("b_status") == 200
+        # Request A's own synthesis must see Alice's adapter throughout — never
+        # Bob's, no matter what request B tried to do in between.
+        assert adapter_seen_by_a == [UUID_A]

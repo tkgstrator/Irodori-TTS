@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -51,12 +52,18 @@ class FakeRuntime:
         )
         self.watermarker = SimpleNamespace(model=object())
         self.tokenizer = FakeTokenizer()
+        # Test hook: called with `self` from inside synthesize(), while the
+        # registry's lock is (correctly) still held. Lets concurrency tests
+        # observe/interfere at the point a real GPU call would block.
+        self.on_synthesize: Callable[[FakeRuntime], None] | None = None
 
     def set_active_adapter(self, name: str) -> None:
         self.active_adapter = name
 
     def synthesize(self, req: Any, **_kwargs: Any) -> SimpleNamespace:
         self.last_request = req
+        if self.on_synthesize is not None:
+            self.on_synthesize(self)
         return SimpleNamespace(
             audio=torch.zeros(1, FAKE_AUDIO_SAMPLES),
             sample_rate=FAKE_SAMPLE_RATE,
@@ -84,8 +91,10 @@ def install_fake_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return calls
 
 
-def lora_test_config(tmp_path: Path, **extra: Any) -> Path:
-    """Config with one discoverable LoRA and an existing (dummy) base checkpoint file."""
+def lora_test_config(tmp_path: Path, *, extra_speaker: bool = False, **extra: Any) -> Path:
+    """Config with one discoverable LoRA (Alice/UUID_A) and an existing (dummy)
+    base checkpoint file. Pass extra_speaker=True to also discover a second
+    speaker (Bob/UUID_B), for tests that need more than one voice."""
     ckpt = tmp_path / "base.safetensors"
     ckpt.write_text("x", encoding="utf-8")
     lora_dir = tmp_path / "loras"
@@ -101,6 +110,18 @@ def lora_test_config(tmp_path: Path, **extra: Any) -> Path:
             "defaults": '{"num_steps": 30}',
         },
     )
+    if extra_speaker:
+        write_lora(
+            lora_dir / "bob.safetensors",
+            {
+                "name": "Bob",
+                "uuid": UUID_B,
+                "speaker.cv": "Bob Actor",
+                "category.id": "male",
+                "category.label": "男性",
+                "defaults": '{"num_steps": 30}',
+            },
+        )
     data: dict[str, Any] = {"base_checkpoint": str(ckpt), "lora_dir": str(lora_dir)}
     data.update(extra)
     return write_config(tmp_path / "c.yaml", data)
