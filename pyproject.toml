@@ -1,6 +1,6 @@
 [project]
 name = "irodori-tts"
-version = "0.6.0"
+version = "0.6.1"
 description = "Irodori-TTS training and inference codebase"
 readme = "README.md"
 license = "MIT"
