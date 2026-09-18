@@ -288,7 +288,9 @@ class TestOpenApiContract:
         assert set(content) >= {"audio/mpeg", "audio/wav", "audio/pcm", "text/event-stream"}
 
 
-def _start_live_server(tmp_path: Path, *, extra_speaker: bool = False) -> tuple[Any, threading.Thread, int]:
+def _start_live_server(
+    tmp_path: Path, *, extra_speaker: bool = False
+) -> tuple[Any, threading.Thread, int]:
     import uvicorn
 
     app = build_app(lora_test_config(tmp_path, extra_speaker=extra_speaker), eager_load=True)
