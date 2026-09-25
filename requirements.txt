@@ -1,3 +1,4 @@
+atmos @ git+https://github.com/qtmleap/atmos@2cf02e56d54a959e5c83eaf55c6370aebc6784f3#subdirectory=packages/python-sdk
 dacvae @ git+https://github.com/facebookresearch/dacvae
 datasets>=3.0.0
 gradio>=5.0.0
@@ -16,4 +17,3 @@ torchcodec>=0.10.0,<0.11.0
 torchdata>=0.11.0
 transformers>=5.12.1,<6
 tqdm>=4.67.3
-wandb>=0.17.0

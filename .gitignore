@@ -221,7 +221,6 @@ gradio_outputs_voicedesign/
 /data/
 /models/
 /outputs/
-/wandb/
 
 # Claude Code runtime state
 .claude/scheduled_tasks.lock

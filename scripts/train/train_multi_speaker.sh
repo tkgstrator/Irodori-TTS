@@ -251,7 +251,7 @@ run_queue() {
       --config "${CONFIG}" \
       --manifest "${manifest}" \
       --output-dir "${outdir}" \
-      --wandb-run-name "${speaker}_lora_v4" \
+      --atmos-run-name "${speaker}_lora_v4" \
       "${init_args[@]}" \
       "${extra[@]}" \
       >> "${log}" 2>&1

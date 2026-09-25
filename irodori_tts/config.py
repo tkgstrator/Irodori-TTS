@@ -204,11 +204,10 @@ class TrainConfig:
     timestep_stratified: bool = True
     timestep_min: float = 0.001
     timestep_max: float = 0.999
-    wandb_enabled: bool = False
-    wandb_project: str = "Irodori-TTS"
-    wandb_entity: str | None = None
-    wandb_run_name: str | None = None
-    wandb_mode: str = "online"
+    atmos_enabled: bool = False
+    atmos_project: str = "Irodori-TTS"
+    atmos_run_name: str | None = None
+    atmos_visibility: str = "private"
     ddp_find_unused_parameters: bool = False
     lora_enabled: bool = False
     lora_r: int = 16
@@ -292,9 +291,9 @@ def load_config_yaml(path: str | Path) -> dict[str, Any]:
         ) from exc
 
     # parse_config expands `${VAR}` / `${VAR:default}` against os.environ so
-    # secrets like WANDB_PROJECT / WANDB_ENTITY can live in env vars instead
-    # of being hardcoded in the yaml. `tag=None` makes the expansion
-    # tagless — no `!ENV` prefix required in the yaml.
+    # secrets like ATMOS_PROJECT can live in env vars instead of being
+    # hardcoded in the yaml. `tag=None` makes the expansion tagless — no
+    # `!ENV` prefix required in the yaml.
     payload = parse_config(path=str(path), tag=None, default_value="")
     if payload is None or payload == "":
         return {}

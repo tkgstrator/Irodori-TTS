@@ -10,7 +10,6 @@ __pycache__
 **/__pycache__
 
 data
-wandb
 *.log
 
 models

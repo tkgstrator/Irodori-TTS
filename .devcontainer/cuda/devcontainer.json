@@ -20,7 +20,7 @@
 		"HF_TOKEN": "${localEnv:HF_TOKEN}",
 		"UV_LINK_MODE": "copy",
 		"WAKATIME_API_KEY": "${localEnv:WAKATIME_API_KEY}",
-		"WANDB_API_KEY": "${localEnv:WANDB_API_KEY}"
+		"ATMOS_TOKEN": "${localEnv:ATMOS_TOKEN}"
 	},
 	"features": {
 		"ghcr.io/devcontainers/features/common-utils:2": {
