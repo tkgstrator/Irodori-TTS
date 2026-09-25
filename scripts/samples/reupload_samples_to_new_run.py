@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Re-upload existing per-checkpoint wavs to a fresh W&B run with stepped logging.
+"""Re-upload existing per-checkpoint wavs to a fresh atmos job with stepped logging.
 
 Reads wavs from ``<samples_dir>/<label>/<prompt>.wav`` (produced by
-upload_post_samples.py) and logs them into a new run using the same key per
+upload_post_samples.py) and logs them into a new job using the same key per
 prompt, with the checkpoint's true training step as the log step. This gives
-wandb's media panel a single audio widget per prompt with a step slider, the
+atmos's media panel a single audio widget per prompt with a step slider, the
 way p1atdev's character run does it.
 """
 
@@ -14,17 +14,14 @@ import argparse
 import re
 from pathlib import Path
 
-import soundfile as sf
-
 LABEL_RE = re.compile(r"^(?:best_)?step_(\d+)(?:_loss_(\d+\.\d+))?$")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--samples-dir", required=True)
-    parser.add_argument("--wandb-project", required=True)
-    parser.add_argument("--wandb-run-name", required=True)
-    parser.add_argument("--wandb-entity", default=None)
+    parser.add_argument("--atmos-project", required=True)
+    parser.add_argument("--atmos-run-name", required=True)
     args = parser.parse_args()
 
     samples_dir = Path(args.samples_dir).resolve()
@@ -47,30 +44,21 @@ def main() -> None:
         tag = f"  best (val_loss={loss:.6f})" if loss is not None else ""
         print(f"  step={step:5d}  {label}{tag}")
 
-    import wandb
+    import atmos
 
-    run = wandb.init(
-        project=args.wandb_project,
-        entity=args.wandb_entity,
-        name=args.wandb_run_name,
-    )
-    print(f"Created W&B run: {run.name} ({run.id})")
+    run = atmos.init(args.atmos_project, name=args.atmos_run_name)
+    print(f"Created atmos job: {run.job_id}")
 
     for step, label, loss, ckpt_dir in entries:
-        payload: dict = {}
         for wav_path in sorted(ckpt_dir.glob("*.wav")):
-            data, sr = sf.read(str(wav_path), dtype="float32")
-            payload[f"samples/{wav_path.stem}"] = wandb.Audio(
-                data,
-                sample_rate=int(sr),
-                caption=label,
-            )
+            # atmos.log_audio() takes a file path directly, so the wav
+            # already on disk is uploaded as-is (no need to round-trip it
+            # through soundfile first).
+            run.log_audio(f"samples/{wav_path.stem}", wav_path, step)
+        metrics: dict[str, float] = {"samples/is_best": 1.0 if loss is not None else 0.0}
         if loss is not None:
-            payload["samples/is_best"] = 1
-            payload["samples/val_loss"] = float(loss)
-        else:
-            payload["samples/is_best"] = 0
-        run.log(payload, step=step)
+            metrics["samples/val_loss"] = float(loss)
+        run.log(metrics, step)
         print(f"  logged step={step} label={label}")
 
     run.finish()

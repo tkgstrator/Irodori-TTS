@@ -9,7 +9,7 @@ services:
     tty: true
     stdin_open: true
     environment:
-      WANDB_BASE_URL: https://wandb.tkgstrator.work
+      ATMOS_API_URL: https://atmos-staging.qleap.jp
 
 volumes:
   venv:

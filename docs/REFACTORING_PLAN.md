@@ -12,19 +12,19 @@ This repository is a fork of Aratako/Irodori-TTS. `pyproject.toml` declares a fo
 
 Classification by `git diff upstream/main...HEAD`:
 
-- Fork-owned (free to split): `server.py` (entire file), `irodori_tts/vds/`, `irodori_tts/wandb_client.py`, `irodori_tts/training_samples.py`, `tests/`, most of `scripts/`.
+- Fork-owned (free to split): `server.py` (entire file), `irodori_tts/vds/`, `irodori_tts/atmos_client.py`, `irodori_tts/training_samples.py`, `tests/`, most of `scripts/`.
 - Substantially diverged (worth splitting): `train.py` (plus 678 lines), `irodori_tts/inference_runtime.py` (plus 184), `irodori_tts/config.py` (plus 102), `irodori_tts/lora.py` (plus 78).
 - Near-identical to upstream (do not touch): `gradio_app.py`, `gradio_app_voicedesign.py`, `infer.py`, `convert_checkpoint_to_safetensors.py`, `quantize_checkpoint.py`, `irodori_tts/dataset.py`, `irodori_tts/model.py` (plus 12 lines only), `irodori_tts/codec.py`, `irodori_tts/rf.py`.
 
 The two gradio apps share about 80 percent of their code, and `convert_checkpoint_to_safetensors.py` carries private copies of several `train.py` helpers. This duplication is intentional: it keeps upstream merges cheap. Leave it in place.
 
-CI runs exactly three checks (`.github/workflows/ci.yaml`): `ruff check`, `ruff format --check`, `pytest`. mypy is not in CI. Existing tests cover only `vds/parser` and `wandb_client`; train, model, inference_runtime, server, and dataset have no tests.
+CI runs exactly three checks (`.github/workflows/ci.yaml`): `ruff check`, `ruff format --check`, `pytest`. mypy is not in CI. Existing tests cover only `vds/parser` and `atmos_client`; train, model, inference_runtime, server, and dataset have no tests.
 
 Entry points that must not change:
 
 - `train.py` CLI flags (consumed by `docker/train/entrypoint.sh` and `configs/*.yaml`).
 - `python server.py` startup (`docker/runtime/entrypoint.sh`) and the API routes `/health`, `/speakers`, `/synth`, `/synth/vds` including PCM streaming (contracts documented in `docs/SERVER.md` and `docs/LLM_API_REFERENCE.md`).
-- Checkpoint formats: `.pt` payload keys, safetensors LoRA adapter metadata (the embedded wandb run uuid is read on resume), and the legacy-checkpoint upgrade path (`_check_model_config_compatibility`, `_upgrade_speaker_in_proj`).
+- Checkpoint formats: `.pt` payload keys, safetensors LoRA adapter metadata (the embedded atmos job id is read on resume), and the legacy-checkpoint upgrade path (`_check_model_config_compatibility`, `_upgrade_speaker_in_proj`).
 
 ## Target layout
 
@@ -51,7 +51,7 @@ irodori_tts/
     distributed.py           # resolve_dist_env, setup_distributed, reduce_mean, reduce_sum,
                              # batch device moves, cuda prefetch
     sampler.py               # LengthGroupedSampler, split_train_valid_indices
-    duration_metrics.py      # duration_condition_group totals, metrics, log suffix, wandb metrics
+    duration_metrics.py      # duration_condition_group totals, metrics, log suffix, prefixed metrics
     validation.py            # run_validation
     cli_args.py              # argparse construction (about 390 lines), cli_provided,
                              # per-field LoRA CLI explicitness
@@ -96,7 +96,7 @@ About 1100 lines moved plus lint compliance work. Done: `server.py` is 110 lines
 
 Create `training/checkpointing.py` (about 550 lines) and `training/speaker_prompts.py` (about 190 lines); replace with imports in `train.py`.
 
-Caution: do not change a single key in the `save_checkpoint` payload (`model_config`, `train_config`, `base_init`, `text_encoder_config`, dataloader state) or in the LoRA safetensors adapter metadata (the wandb run uuid there is read on resume, around `train.py` line 3302).
+Caution: do not change a single key in the `save_checkpoint` payload (`model_config`, `train_config`, `base_init`, `text_encoder_config`, dataloader state) or in the LoRA safetensors adapter metadata (the atmos job id there is read on resume, around `train.py` line 3302).
 
 ### Step 2b: extract model initialization and checkpoint compatibility
 
@@ -110,7 +110,7 @@ Create `training/distributed.py`, `training/sampler.py`, `training/duration_metr
 
 ### Step 3: dismantle train.py main()
 
-Move argparse construction (about 390 lines) to `training/cli_args.py`. Capture `python train.py --help` output before and after and diff it; it must be identical. Split the remaining `main()` into functions (config resolution, wandb setup, dataset and loader construction, model with LoRA and resume, training loop) within the same file.
+Move argparse construction (about 390 lines) to `training/cli_args.py`. Capture `python train.py --help` output before and after and diff it; it must be identical. Split the remaining `main()` into functions (config resolution, atmos setup, dataset and loader construction, model with LoRA and resume, training loop) within the same file.
 
 This brings `train.py` from 4818 to roughly 1500 lines. Once done, remove `train.py` from the `ruff format` exclude and per-file-ignores in `pyproject.toml` and apply `ruff format`, declaring it diverged per the fork policy. The format diff is large, so make this its own PR.
 

@@ -73,8 +73,8 @@ from irodori_tts.training.checkpointing import (
     save_checkpoint,
 )
 from irodori_tts.training.cli_args import (
+    ATMOS_VISIBILITIES,
     TRAIN_MODES,
-    WANDB_MODES,
     build_parser,
     cli_provided,
 )
@@ -88,8 +88,8 @@ from irodori_tts.training.duration_metrics import (
     DURATION_CONDITION_GROUP_TOTAL_SIZE,
     duration_condition_group_log_suffix,
     duration_condition_group_metrics,
+    duration_condition_group_prefixed_metrics,
     duration_condition_group_totals,
-    duration_condition_group_wandb_metrics,
 )
 from irodori_tts.training.losses import compute_rf_loss
 from irodori_tts.training.model_init import (
@@ -305,16 +305,14 @@ def _resolve_configs(  # noqa: C901, PLR0912, PLR0915
         train_cfg = replace(train_cfg, progress=args.progress)
     if args.progress_all is not None:
         train_cfg = replace(train_cfg, progress_all_ranks=args.progress_all)
-    if args.wandb_enabled is not None:
-        train_cfg = replace(train_cfg, wandb_enabled=args.wandb_enabled)
-    if cli_provided(raw_argv, "--wandb-project"):
-        train_cfg = replace(train_cfg, wandb_project=args.wandb_project)
-    if cli_provided(raw_argv, "--wandb-entity"):
-        train_cfg = replace(train_cfg, wandb_entity=args.wandb_entity)
-    if cli_provided(raw_argv, "--wandb-run-name"):
-        train_cfg = replace(train_cfg, wandb_run_name=args.wandb_run_name)
-    if cli_provided(raw_argv, "--wandb-mode"):
-        train_cfg = replace(train_cfg, wandb_mode=args.wandb_mode)
+    if args.atmos_enabled is not None:
+        train_cfg = replace(train_cfg, atmos_enabled=args.atmos_enabled)
+    if cli_provided(raw_argv, "--atmos-project"):
+        train_cfg = replace(train_cfg, atmos_project=args.atmos_project)
+    if cli_provided(raw_argv, "--atmos-run-name"):
+        train_cfg = replace(train_cfg, atmos_run_name=args.atmos_run_name)
+    if cli_provided(raw_argv, "--atmos-visibility"):
+        train_cfg = replace(train_cfg, atmos_visibility=args.atmos_visibility)
     if args.lora_enabled is not None:
         train_cfg = replace(train_cfg, lora_enabled=args.lora_enabled)
     if cli_provided(raw_argv, "--lora-r"):
@@ -691,9 +689,10 @@ def _resolve_configs(  # noqa: C901, PLR0912, PLR0915
         print("warning: valid_every is set but valid_ratio=0. Validation is disabled.")
     if train_cfg.checkpoint_best_n < 0:
         raise ValueError(f"checkpoint_best_n must be >= 0, got {train_cfg.checkpoint_best_n}")
-    if train_cfg.wandb_mode not in WANDB_MODES:
+    if train_cfg.atmos_visibility not in ATMOS_VISIBILITIES:
         raise ValueError(
-            f"wandb_mode must be one of {sorted(WANDB_MODES)}, got {train_cfg.wandb_mode!r}"
+            f"atmos_visibility must be one of {sorted(ATMOS_VISIBILITIES)}, "
+            f"got {train_cfg.atmos_visibility!r}"
         )
     precision = str(train_cfg.precision).lower()
     if precision not in {"fp32", "bf16"}:
@@ -739,21 +738,21 @@ def _resolve_configs(  # noqa: C901, PLR0912, PLR0915
     )
 
 
-def _setup_wandb_and_tokenizers(  # noqa: C901, PLR0912, PLR0913, PLR0915
+def _setup_atmos_and_tokenizers(  # noqa: C901, PLR0912, PLR0915
     *,
     args,
     distributed,
     is_main_process,
     model_cfg,
-    output_dir,
     train_cfg,
 ) -> tuple:
-    from irodori_tts.wandb_client import WandbClient
-    from irodori_tts.wandb_client import from_env as _wandb_cfg_from_env
+    from irodori_tts.atmos_client import AtmosClient
+    from irodori_tts.atmos_client import from_env as _atmos_cfg_from_env
 
-    # Resolve the persistent run UUID before wandb.init so the same wandb run
-    # is reused when training resumes from a checkpoint. The uuid is stored on
-    # the prior adapter_model.safetensors metadata (see _build_lora_safetensors_metadata).
+    # Resolve the persistent run UUID before atmos.init so the same atmos job
+    # is reused (job_id) when training resumes from a checkpoint. The uuid is
+    # stored on the prior adapter_model.safetensors metadata (see
+    # _build_lora_safetensors_metadata).
     run_uuid: str | None = None
     if args.resume is not None:
         try:
@@ -768,27 +767,24 @@ def _setup_wandb_and_tokenizers(  # noqa: C901, PLR0912, PLR0913, PLR0915
     if not run_uuid:
         run_uuid = str(_uuid.uuid4())
 
-    wandb_client = WandbClient(
-        _wandb_cfg_from_env(
-            enabled=train_cfg.wandb_enabled and is_main_process,
-            project=train_cfg.wandb_project,
-            entity=train_cfg.wandb_entity,
-            run_name=train_cfg.wandb_run_name,
-            mode=train_cfg.wandb_mode or "online",
-            run_id=run_uuid,
-            resume="allow",
+    atmos_client = AtmosClient(
+        _atmos_cfg_from_env(
+            enabled=train_cfg.atmos_enabled and is_main_process,
+            project=train_cfg.atmos_project,
+            run_name=train_cfg.atmos_run_name,
+            visibility=train_cfg.atmos_visibility or "private",
+            job_id=run_uuid,
         ),
         config={
             "model": asdict(model_cfg),
             "train": asdict(train_cfg),
             "script": "train.py",
         },
-        output_dir=output_dir,
     )
-    if wandb_client.enabled:
+    if atmos_client.enabled:
         print(
-            f"W&B enabled: project={train_cfg.wandb_project} mode={train_cfg.wandb_mode} "
-            f"run={wandb_client.name} base_url={wandb_client.base_url or '<default>'}"
+            f"atmos enabled: project={train_cfg.atmos_project} "
+            f"run={atmos_client.name} api_url={atmos_client.api_url or '<default>'}"
         )
 
     # The distributed path assigns these through two complementary branches, so
@@ -849,10 +845,10 @@ def _setup_wandb_and_tokenizers(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 f"(pretrained hidden_size={caption_hidden_size})."
             )
     return (
+        atmos_client,
         caption_tokenizer,
         run_uuid,
         tokenizer,
-        wandb_client,
     )
 
 
@@ -868,7 +864,7 @@ def _build_data(  # noqa: C901, PLR0912, PLR0913, PLR0915
     run_uuid,
     tokenizer,
     train_cfg,
-    wandb_client,
+    atmos_client,
     world_size,
 ) -> tuple:
     manifest_index = _ManifestIndex.build(
@@ -1082,7 +1078,7 @@ def _build_data(  # noqa: C901, PLR0912, PLR0913, PLR0915
     )
 
     speaker_name = _resolve_speaker_id(train_cfg.manifest_path)
-    run_name = wandb_client.name or train_cfg.wandb_run_name or output_dir.name
+    run_name = atmos_client.name or train_cfg.atmos_run_name or output_dir.name
     if is_main_process:
         print(f"[run identity] uuid={run_uuid} name={run_name} speaker={speaker_name}")
     if train_cfg.max_epochs is not None:
@@ -1556,7 +1552,7 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
     train_sampler,
     use_bf16,
     valid_loader,
-    wandb_client,
+    atmos_client,
     world_size,
 ) -> None:
     accum_steps = int(train_cfg.gradient_accumulation_steps)
@@ -2014,12 +2010,12 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
                             metrics["train/duration_mae_frames"] = duration_mae_frames_value
                             if duration_only:
                                 metrics.update(
-                                    duration_condition_group_wandb_metrics(
+                                    duration_condition_group_prefixed_metrics(
                                         "train",
                                         duration_group_metrics,
                                     )
                                 )
-                        wandb_client.log(metrics, step=step)
+                        atmos_client.log(metrics, step=step)
 
                 if step % train_cfg.save_every == 0:
                     dataloader_state = _collect_dataloader_state(
@@ -2130,12 +2126,12 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
                             ]
                             if duration_only:
                                 metrics.update(
-                                    duration_condition_group_wandb_metrics(
+                                    duration_condition_group_prefixed_metrics(
                                         "valid",
                                         valid_metrics,
                                     )
                                 )
-                        wandb_client.log(metrics, step=step)
+                        atmos_client.log(metrics, step=step)
                         if es_enabled:
                             cur_val = float(valid_metrics["loss"])
                             if cur_val < es_best_val - train_cfg.early_stop_min_delta:
@@ -2143,7 +2139,7 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
                                 es_no_improve = 0
                             else:
                                 es_no_improve += 1
-                            wandb_client.log(
+                            atmos_client.log(
                                 {
                                     "es/no_improve": es_no_improve,
                                     "es/best_val": es_best_val,
@@ -2269,12 +2265,12 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     metrics["valid/duration_mae_frames"] = valid_metrics["duration_mae_frames"]
                     if duration_only:
                         metrics.update(
-                            duration_condition_group_wandb_metrics(
+                            duration_condition_group_prefixed_metrics(
                                 "valid",
                                 valid_metrics,
                             )
                         )
-                wandb_client.log(metrics, step=step)
+                atmos_client.log(metrics, step=step)
                 best_val_checkpoints, best_path = maybe_save_best_val_loss_checkpoint(
                     output_dir=output_dir,
                     checkpoints=best_val_checkpoints,
@@ -2339,14 +2335,14 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
             )
             if sample_cfg.enabled:
                 _maybe_emit_samples(step)
-            wandb_client.set_summary("train/final_step", step)
+            atmos_client.log({"train/final_step": float(step)}, step=step)
             progress.write(f"Training finished at step={step}.")
     finally:
         if progress is not None:
             progress.close()
         if sampling_codec is not None:
             del sampling_codec
-        wandb_client.finish()
+        atmos_client.finish()
         if distributed and dist.is_initialized():
             dist.destroy_process_group()
 
@@ -2384,16 +2380,15 @@ def main() -> None:
     if is_main_process and distributed:
         print(f"DDP enabled: world_size={world_size} (local_rank={local_rank})")
     (
+        atmos_client,
         caption_tokenizer,
         run_uuid,
         tokenizer,
-        wandb_client,
-    ) = _setup_wandb_and_tokenizers(
+    ) = _setup_atmos_and_tokenizers(
         args=args,
         distributed=distributed,
         is_main_process=is_main_process,
         model_cfg=model_cfg,
-        output_dir=output_dir,
         train_cfg=train_cfg,
     )
     (
@@ -2421,7 +2416,7 @@ def main() -> None:
         run_uuid=run_uuid,
         tokenizer=tokenizer,
         train_cfg=train_cfg,
-        wandb_client=wandb_client,
+        atmos_client=atmos_client,
         world_size=world_size,
     )
 
@@ -2496,7 +2491,7 @@ def main() -> None:
             model_device=device,
             step=current_step,
             output_dir=output_dir,
-            wandb_client=wandb_client,
+            atmos_client=atmos_client,
             log_fn=lambda msg: progress.write(msg) if progress is not None else None,
         )
 
@@ -2548,7 +2543,7 @@ def main() -> None:
         train_sampler=train_sampler,
         use_bf16=use_bf16,
         valid_loader=valid_loader,
-        wandb_client=wandb_client,
+        atmos_client=atmos_client,
         world_size=world_size,
     )
 

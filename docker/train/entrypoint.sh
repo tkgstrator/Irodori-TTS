@@ -3,21 +3,10 @@
 #
 # Environment variables:
 #   HF_TOKEN           - HF access token (required for private datasets / uploads).
-#   WANDB_API_KEY      - W&B API key (optional; enables online logging).
-#   WANDB_BASE_URL     - Custom W&B server URL (e.g. https://wandb.tkgstrator.work).
-#                        Unset for public wandb.ai.
-#   WANDB_PROJECT      - W&B project name. Expanded into the training yaml
-#                        by pyaml-env (${WANDB_PROJECT:Irodori-TTS}).
-#   WANDB_ENTITY       - W&B entity (user / team). Expanded into the yaml
-#                        by pyaml-env (${WANDB_ENTITY:}). Leave unset to
-#                        fall back to your W&B default entity.
-#   WANDB_MODE         - W&B mode: online / offline / disabled. Expanded
-#                        into the yaml by pyaml-env (${WANDB_MODE:online}).
-#   CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET
-#                      - Cloudflare Access service-token credentials. Required
-#                        when WANDB_BASE_URL points at a server behind CF Access;
-#                        train.py injects them as CF-Access-* headers on wandb
-#                        requests.
+#   ATMOS_TOKEN        - atmos API token (optional; enables metrics logging).
+#   ATMOS_API_URL      - atmos server URL (e.g. https://atmos-staging.qleap.jp).
+#   ATMOS_PROJECT      - atmos project name. Expanded into the training yaml
+#                        by pyaml-env (${ATMOS_PROJECT:Irodori-TTS}).
 #   HF_DATASET         - HF dataset repo ID that holds all speakers as subdirs
 #                        (e.g. ultemica/irodori-tts-voices). If unset, skips
 #                        download and uses whatever is already mounted under
@@ -171,20 +160,12 @@ for s in "${TRAIN_SPEAKERS[@]}"; do
 done
 
 # -----------------------------------------------------------------------------
-# 5. W&B login (optional).
+# 5. atmos login (optional).
 # -----------------------------------------------------------------------------
-if [ -n "${WANDB_API_KEY:-}" ]; then
-  log "W&B key detected — runs will log online"
-  if [ -n "${WANDB_BASE_URL:-}" ]; then
-    log "W&B server: ${WANDB_BASE_URL}"
-    if [ -n "${CF_ACCESS_CLIENT_ID:-}" ] && [ -n "${CF_ACCESS_CLIENT_SECRET:-}" ]; then
-      log "CF Access service token detected — will be forwarded as CF-Access-* headers"
-    else
-      log "WARNING: WANDB_BASE_URL set but CF_ACCESS_CLIENT_ID/SECRET missing — requests may be blocked by Cloudflare Access"
-    fi
-  fi
+if [ -n "${ATMOS_TOKEN:-}" ]; then
+  log "atmos token detected — runs will log to ${ATMOS_API_URL:-<default>}"
 else
-  log "no WANDB_API_KEY — W&B runs may fall back to offline mode"
+  log "no ATMOS_TOKEN — atmos-enabled configs will fail to start; unset atmos_enabled to skip logging"
 fi
 
 # -----------------------------------------------------------------------------

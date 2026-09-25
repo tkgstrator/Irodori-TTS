@@ -75,11 +75,9 @@ train:
   log_every: 100
   save_every: 1000
   checkpoint_best_n: 5
-  wandb_enabled: false
-  wandb_project:
-  wandb_entity:
-  wandb_run_name:
-  wandb_mode: online
+  atmos_enabled: false
+  atmos_project:
+  atmos_run_name:
   ddp_find_unused_parameters: false
   valid_ratio: 0.0005
   valid_every: 1000

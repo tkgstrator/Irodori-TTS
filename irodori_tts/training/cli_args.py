@@ -8,7 +8,7 @@ import torch
 
 from irodori_tts.lora import LORA_TARGET_PRESETS
 
-WANDB_MODES = {"online", "offline", "disabled"}
+ATMOS_VISIBILITIES = {"public", "internal", "private"}
 TRAIN_MODES = {"rf", "duration_only"}
 
 
@@ -316,40 +316,35 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         default=None,
         help="Show tqdm progress bars for all ranks in DDP mode (default: rank0 only).",
     )
-    wandb_group = parser.add_mutually_exclusive_group()
-    wandb_group.add_argument(
-        "--wandb",
-        dest="wandb_enabled",
+    atmos_group = parser.add_mutually_exclusive_group()
+    atmos_group.add_argument(
+        "--atmos",
+        dest="atmos_enabled",
         action="store_true",
-        help="Enable Weights & Biases logging.",
+        help="Enable atmos metrics logging.",
     )
-    wandb_group.add_argument(
-        "--no-wandb",
-        dest="wandb_enabled",
+    atmos_group.add_argument(
+        "--no-atmos",
+        dest="atmos_enabled",
         action="store_false",
-        help="Disable Weights & Biases logging.",
+        help="Disable atmos metrics logging.",
     )
-    parser.set_defaults(wandb_enabled=None)
+    parser.set_defaults(atmos_enabled=None)
     parser.add_argument(
-        "--wandb-project",
+        "--atmos-project",
         default=None,
-        help="Weights & Biases project name.",
-    )
-    parser.add_argument(
-        "--wandb-entity",
-        default=None,
-        help="Weights & Biases entity/team name.",
+        help="atmos project name.",
     )
     parser.add_argument(
-        "--wandb-run-name",
+        "--atmos-run-name",
         default=None,
-        help="Weights & Biases run name.",
+        help="atmos run name.",
     )
     parser.add_argument(
-        "--wandb-mode",
-        choices=sorted(WANDB_MODES),
+        "--atmos-visibility",
+        choices=sorted(ATMOS_VISIBILITIES),
         default=None,
-        help="Weights & Biases mode.",
+        help="atmos project visibility for newly created projects.",
     )
     lora_group = parser.add_mutually_exclusive_group()
     lora_group.add_argument(

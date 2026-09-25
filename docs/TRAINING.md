@@ -197,26 +197,20 @@ docker compose build train
 | `NUM_GPUS`                | 任意 | 利用する GPU の数(整数)。指定すると index `0..NUM_GPUS-1` を自動割当                              |
 | `GPUS`                    | 任意 | 利用する GPU index をスペース区切り(例: `"0 1 2 3"`)。`NUM_GPUS` より優先。未指定なら見えてる GPU 全部 |
 | `NO_RESUME`               | 任意 | `true` で既存 checkpoint を無視して最初から学習。未指定なら `outputs/<speaker>_lora/checkpoint_*` から自動 resume |
-| `WANDB_API_KEY`           | 任意 | 指定すると online mode で W&B に自動ログインされる                                                   |
-| `WANDB_BASE_URL`          | 任意 | self-hosted W&B サーバの URL。未指定なら public `wandb.ai` |
-| `WANDB_PROJECT`           | 任意 | W&B プロジェクト名。yaml 側で `${WANDB_PROJECT}` として参照される(pyaml-env が展開)                |
-| `WANDB_ENTITY`            | 任意 | W&B entity (user / team)。同上。未指定なら W&B のデフォルト entity にフォールバック                  |
-| `WANDB_MODE`              | 任意 | `online` / `offline` / `disabled`。同上。未指定なら `online`                                        |
-| `CF_ACCESS_CLIENT_ID`     | 任意 | `WANDB_BASE_URL` が Cloudflare Access の背後にある場合の service token。`train.py` が `CF-Access-*` header として付与 |
-| `CF_ACCESS_CLIENT_SECRET` | 任意 | 同上(secret 側)                                                                                   |
+| `ATMOS_TOKEN`             | 任意 | 指定すると atmos に自動ログインされる                                                                |
+| `ATMOS_API_URL`           | 任意 | atmos サーバの URL(例: `https://atmos-staging.qleap.jp`)                                          |
+| `ATMOS_PROJECT`           | 任意 | atmos プロジェクト名。yaml 側で `${ATMOS_PROJECT}` として参照される(pyaml-env が展開)               |
 
 ### 3.2 `docker/train/compose.yaml`
 
-学習用の compose ファイルはリポジトリに同梱されています (`docker/train/compose.yaml`)。`.env` をリポジトリルートに置いて `HF_TOKEN` / `WANDB_API_KEY` を入れるだけで回せます。`build:` と `image:` の両方を持っているので `docker compose` がイメージを自動ビルドします(既にビルド済みなら pull)。
+学習用の compose ファイルはリポジトリに同梱されています (`docker/train/compose.yaml`)。`.env` をリポジトリルートに置いて `HF_TOKEN` / `ATMOS_TOKEN` を入れるだけで回せます。`build:` と `image:` の両方を持っているので `docker compose` がイメージを自動ビルドします(既にビルド済みなら pull)。
 
 `.env`:
 ```
 HF_TOKEN=hf_xxx
-WANDB_API_KEY=xxxxxxxx
-# (任意) self-hosted W&B を使う場合
-# WANDB_BASE_URL=<your-wandb-host>
-# CF_ACCESS_CLIENT_ID=...
-# CF_ACCESS_CLIENT_SECRET=...
+ATMOS_TOKEN=xxxxxxxx
+# (任意) デフォルトの staging サーバ以外を使う場合
+# ATMOS_API_URL=<your-atmos-host>
 ```
 
 起動:
@@ -332,7 +326,7 @@ environment:
 2. **regression**: `val_loss > best_val_loss × (1 + early_stop_regression_ratio)` になった時点で即停止
 3. どちらも `step >= early_stop_min_step` の条件を満たしている時にだけ発火(初期の不安定期で誤発火しない floor)
 
-wandb には `es/no_improve` / `es/best_val` が各 eval ごとに記録されるので、発火の兆候を事後確認できます。
+atmos には `es/no_improve` / `es/best_val` が各 eval ごとに記録されるので、発火の兆候を事後確認できます。
 
 パラメータ設定のメモ:
 
@@ -401,6 +395,6 @@ with safe_open(
 |--------------------------------------------------|------------------------------------------------------------------------------------------|
 | `no speakers to train` で即終了                  | `HF_DATASET` を指定するか、`data/` を正しくマウントする                                   |
 | `missing config configs/train_500m_v2_<s>_lora.yaml` | 通常は自動生成されるはず。それでも出る場合はベーステンプレートが壊れていないか確認     |
-| W&B がオフラインになる                           | `WANDB_API_KEY` を `.env` に入れて再実行                                                 |
+| atmos にログが飛ばない                           | `ATMOS_TOKEN` を `.env` に入れて再実行                                                   |
 | GPU が見えない                                   | `docker run --gpus all` または compose の `deploy.resources` 指定を確認                  |
 | ベースチェックポイントが pull できない           | `HF_TOKEN` をセット、もしくは `BASE_MODEL_REPO` を自前のミラーに変更                      |
