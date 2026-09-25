@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Re-upload existing per-checkpoint wavs to a fresh metrics run with stepped logging.
 
-Reads wavs from ``<samples_dir>/<label>/<prompt>.wav`` (produced by
-upload_post_samples.py) and logs them into a new run using the same key per
+Reads wavs from ``<samples_dir>/<label>/<prompt>.wav`` and logs them into a new run using the same key per
 prompt, with the checkpoint's true training step as the log step. This gives
 the metrics backend's media panel a single audio widget per prompt with a
 step slider, the way p1atdev's character run does it.
