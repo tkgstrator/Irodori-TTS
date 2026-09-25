@@ -12,13 +12,13 @@ This repository is a fork of Aratako/Irodori-TTS. `pyproject.toml` declares a fo
 
 Classification by `git diff upstream/main...HEAD`:
 
-- Fork-owned (free to split): `server.py` (entire file), `irodori_tts/vds/`, `irodori_tts/atmos_client.py`, `irodori_tts/training_samples.py`, `tests/`, most of `scripts/`.
+- Fork-owned (free to split): `server.py` (entire file), `irodori_tts/vds/`, `irodori_tts/metrics/` (metrics logging layer, atmos backend under `metrics/atmos.py`), `irodori_tts/training_samples.py`, `tests/`, most of `scripts/`.
 - Substantially diverged (worth splitting): `train.py` (plus 678 lines), `irodori_tts/inference_runtime.py` (plus 184), `irodori_tts/config.py` (plus 102), `irodori_tts/lora.py` (plus 78).
 - Near-identical to upstream (do not touch): `gradio_app.py`, `gradio_app_voicedesign.py`, `infer.py`, `convert_checkpoint_to_safetensors.py`, `quantize_checkpoint.py`, `irodori_tts/dataset.py`, `irodori_tts/model.py` (plus 12 lines only), `irodori_tts/codec.py`, `irodori_tts/rf.py`.
 
 The two gradio apps share about 80 percent of their code, and `convert_checkpoint_to_safetensors.py` carries private copies of several `train.py` helpers. This duplication is intentional: it keeps upstream merges cheap. Leave it in place.
 
-CI runs exactly three checks (`.github/workflows/ci.yaml`): `ruff check`, `ruff format --check`, `pytest`. mypy is not in CI. Existing tests cover only `vds/parser` and `atmos_client`; train, model, inference_runtime, server, and dataset have no tests.
+CI runs exactly three checks (`.github/workflows/ci.yaml`): `ruff check`, `ruff format --check`, `pytest`. mypy is not in CI. Existing tests cover only `vds/parser` and the metrics logging layer; train, model, inference_runtime, server, and dataset have no tests.
 
 Entry points that must not change:
 
@@ -110,7 +110,7 @@ Create `training/distributed.py`, `training/sampler.py`, `training/duration_metr
 
 ### Step 3: dismantle train.py main()
 
-Move argparse construction (about 390 lines) to `training/cli_args.py`. Capture `python train.py --help` output before and after and diff it; it must be identical. Split the remaining `main()` into functions (config resolution, atmos setup, dataset and loader construction, model with LoRA and resume, training loop) within the same file.
+Move argparse construction (about 390 lines) to `training/cli_args.py`. Capture `python train.py --help` output before and after and diff it; it must be identical. Split the remaining `main()` into functions (config resolution, metrics setup, dataset and loader construction, model with LoRA and resume, training loop) within the same file.
 
 This brings `train.py` from 4818 to roughly 1500 lines. Once done, remove `train.py` from the `ruff format` exclude and per-file-ignores in `pyproject.toml` and apply `ruff format`, declaring it diverged per the fork policy. The format diff is large, so make this its own PR.
 

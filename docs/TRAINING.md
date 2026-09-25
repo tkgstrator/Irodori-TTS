@@ -197,18 +197,22 @@ docker compose build train
 | `NUM_GPUS`                | 任意 | 利用する GPU の数(整数)。指定すると index `0..NUM_GPUS-1` を自動割当                              |
 | `GPUS`                    | 任意 | 利用する GPU index をスペース区切り(例: `"0 1 2 3"`)。`NUM_GPUS` より優先。未指定なら見えてる GPU 全部 |
 | `NO_RESUME`               | 任意 | `true` で既存 checkpoint を無視して最初から学習。未指定なら `outputs/<speaker>_lora/checkpoint_*` から自動 resume |
-| `ATMOS_TOKEN`             | 任意 | 指定すると atmos に自動ログインされる                                                                |
-| `ATMOS_API_URL`           | 任意 | atmos サーバの URL(例: `https://atmos-staging.qleap.jp`)                                          |
-| `ATMOS_PROJECT`           | 任意 | atmos プロジェクト名。yaml 側で `${ATMOS_PROJECT}` として参照される(pyaml-env が展開)               |
+| `METRICS_BACKEND`         | 任意 | メトリクスロギングのバックエンド。`none`(デフォルト)または `atmos`                                   |
+| `METRICS_PROJECT`         | 任意 | メトリクスのプロジェクト名。yaml 側で `${METRICS_PROJECT}` として参照される(pyaml-env が展開)         |
+| `ATMOS_TOKEN`             | 任意 | `METRICS_BACKEND=atmos` のときのみ使用。指定すると atmos に自動ログインされる                        |
+| `ATMOS_API_URL`           | 任意 | `METRICS_BACKEND=atmos` のときのみ使用。atmos サーバの URL(例: `https://atmos-staging.qleap.jp`)  |
+| `ATMOS_VISIBILITY`        | 任意 | `METRICS_BACKEND=atmos` のときのみ使用。atmos run の公開範囲                                        |
 
 ### 3.2 `docker/train/compose.yaml`
 
-学習用の compose ファイルはリポジトリに同梱されています (`docker/train/compose.yaml`)。`.env` をリポジトリルートに置いて `HF_TOKEN` / `ATMOS_TOKEN` を入れるだけで回せます。`build:` と `image:` の両方を持っているので `docker compose` がイメージを自動ビルドします(既にビルド済みなら pull)。
+学習用の compose ファイルはリポジトリに同梱されています (`docker/train/compose.yaml`)。`.env` をリポジトリルートに置いて `HF_TOKEN` を入れるだけで回せます。atmos にメトリクスを送るときは `METRICS_BACKEND=atmos` と `ATMOS_TOKEN` を追加で入れてください。`build:` と `image:` の両方を持っているので `docker compose` がイメージを自動ビルドします(既にビルド済みなら pull)。
 
 `.env`:
 ```
 HF_TOKEN=hf_xxx
-ATMOS_TOKEN=xxxxxxxx
+# atmos にメトリクスを送る場合
+# METRICS_BACKEND=atmos
+# ATMOS_TOKEN=xxxxxxxx
 # (任意) デフォルトの staging サーバ以外を使う場合
 # ATMOS_API_URL=<your-atmos-host>
 ```
@@ -395,6 +399,6 @@ with safe_open(
 |--------------------------------------------------|------------------------------------------------------------------------------------------|
 | `no speakers to train` で即終了                  | `HF_DATASET` を指定するか、`data/` を正しくマウントする                                   |
 | `missing config configs/train_500m_v2_<s>_lora.yaml` | 通常は自動生成されるはず。それでも出る場合はベーステンプレートが壊れていないか確認     |
-| atmos にログが飛ばない                           | `ATMOS_TOKEN` を `.env` に入れて再実行                                                   |
+| atmos にログが飛ばない                           | `METRICS_BACKEND=atmos` と `ATMOS_TOKEN` を `.env` に入れて再実行                        |
 | GPU が見えない                                   | `docker run --gpus all` または compose の `deploy.resources` 指定を確認                  |
 | ベースチェックポイントが pull できない           | `HF_TOKEN` をセット、もしくは `BASE_MODEL_REPO` を自前のミラーに変更                      |

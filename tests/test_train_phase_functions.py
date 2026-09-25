@@ -54,7 +54,7 @@ def _phase_functions() -> list[ast.FunctionDef]:
 def test_train_py_has_phase_functions() -> None:
     assert {fn.name for fn in _phase_functions()} >= {
         "_resolve_configs",
-        "_setup_atmos_and_tokenizers",
+        "_setup_metrics_and_tokenizers",
         "_build_data",
         "_build_model",
         "_run_training_loop",

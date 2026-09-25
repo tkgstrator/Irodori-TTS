@@ -8,7 +8,7 @@ import torch
 
 from irodori_tts.lora import LORA_TARGET_PRESETS
 
-ATMOS_VISIBILITIES = {"public", "internal", "private"}
+METRICS_BACKENDS = {"none", "atmos"}
 TRAIN_MODES = {"rf", "duration_only"}
 
 
@@ -316,35 +316,21 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         default=None,
         help="Show tqdm progress bars for all ranks in DDP mode (default: rank0 only).",
     )
-    atmos_group = parser.add_mutually_exclusive_group()
-    atmos_group.add_argument(
-        "--atmos",
-        dest="atmos_enabled",
-        action="store_true",
-        help="Enable atmos metrics logging.",
-    )
-    atmos_group.add_argument(
-        "--no-atmos",
-        dest="atmos_enabled",
-        action="store_false",
-        help="Disable atmos metrics logging.",
-    )
-    parser.set_defaults(atmos_enabled=None)
     parser.add_argument(
-        "--atmos-project",
+        "--metrics-backend",
+        choices=sorted(METRICS_BACKENDS),
         default=None,
-        help="atmos project name.",
+        help="Metrics logging backend. 'none' (default) disables metrics logging.",
     )
     parser.add_argument(
-        "--atmos-run-name",
+        "--metrics-project",
         default=None,
-        help="atmos run name.",
+        help="Metrics backend project name.",
     )
     parser.add_argument(
-        "--atmos-visibility",
-        choices=sorted(ATMOS_VISIBILITIES),
+        "--metrics-run-name",
         default=None,
-        help="atmos project visibility for newly created projects.",
+        help="Metrics backend run name.",
     )
     lora_group = parser.add_mutually_exclusive_group()
     lora_group.add_argument(

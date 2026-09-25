@@ -3,10 +3,14 @@
 #
 # Environment variables:
 #   HF_TOKEN           - HF access token (required for private datasets / uploads).
-#   ATMOS_TOKEN        - atmos API token (optional; enables metrics logging).
+#   METRICS_BACKEND    - Metrics logging backend: "none" (default) or "atmos".
+#                        Forwarded to train.py as --metrics-backend.
+#   METRICS_PROJECT    - Metrics project name. Expanded into the training yaml
+#                        by pyaml-env (${METRICS_PROJECT:Irodori-TTS}).
+#   ATMOS_TOKEN        - atmos API token. Used only when METRICS_BACKEND=atmos.
 #   ATMOS_API_URL      - atmos server URL (e.g. https://atmos-staging.qleap.jp).
-#   ATMOS_PROJECT      - atmos project name. Expanded into the training yaml
-#                        by pyaml-env (${ATMOS_PROJECT:Irodori-TTS}).
+#                        Used only when METRICS_BACKEND=atmos.
+#   ATMOS_VISIBILITY   - atmos run visibility. Used only when METRICS_BACKEND=atmos.
 #   HF_DATASET         - HF dataset repo ID that holds all speakers as subdirs
 #                        (e.g. ultemica/irodori-tts-voices). If unset, skips
 #                        download and uses whatever is already mounted under
@@ -69,8 +73,12 @@ log() { printf '[entrypoint] %s\n' "$*"; }
 #    sources; UV_PROJECT_ENVIRONMENT points at the container's system Python,
 #    so this installs there rather than into a virtualenv.
 # -----------------------------------------------------------------------------
-log "uv sync (env=${UV_PROJECT_ENVIRONMENT:-.venv})"
-uv sync --frozen --no-dev
+sync_extras=()
+if [ "${METRICS_BACKEND:-none}" = "atmos" ]; then
+  sync_extras+=(--extra atmos)
+fi
+log "uv sync (env=${UV_PROJECT_ENVIRONMENT:-.venv})${sync_extras:+ ${sync_extras[*]}}"
+uv sync --frozen --no-dev "${sync_extras[@]}"
 
 # -----------------------------------------------------------------------------
 # 1. Ensure base checkpoint is present.
@@ -160,12 +168,16 @@ for s in "${TRAIN_SPEAKERS[@]}"; do
 done
 
 # -----------------------------------------------------------------------------
-# 5. atmos login (optional).
+# 5. metrics backend check.
 # -----------------------------------------------------------------------------
-if [ -n "${ATMOS_TOKEN:-}" ]; then
-  log "atmos token detected — runs will log to ${ATMOS_API_URL:-<default>}"
+if [ "${METRICS_BACKEND:-none}" = "atmos" ]; then
+  if [ -n "${ATMOS_TOKEN:-}" ]; then
+    log "atmos token detected — runs will log to ${ATMOS_API_URL:-<default>}"
+  else
+    log "METRICS_BACKEND=atmos but no ATMOS_TOKEN — the run will fail to start; set ATMOS_TOKEN or METRICS_BACKEND=none"
+  fi
 else
-  log "no ATMOS_TOKEN — atmos-enabled configs will fail to start; unset atmos_enabled to skip logging"
+  log "metrics logging disabled (METRICS_BACKEND=${METRICS_BACKEND:-none})"
 fi
 
 # -----------------------------------------------------------------------------

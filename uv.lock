@@ -1540,7 +1540,6 @@ name = "irodori-tts"
 version = "0.6.1"
 source = { virtual = "." }
 dependencies = [
-    { name = "atmos" },
     { name = "dacvae" },
     { name = "datasets" },
     { name = "fastapi" },
@@ -1574,6 +1573,10 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+atmos = [
+    { name = "atmos" },
+    { name = "python-dotenv" },
+]
 cpu = [
     { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-11-irodori-tts-cpu') or (sys_platform == 'linux' and extra == 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-cu128') or (sys_platform == 'linux' and extra == 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-rocm') or (sys_platform == 'linux' and extra == 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-xpu') or (sys_platform == 'win32' and extra == 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-cu128') or (sys_platform == 'win32' and extra == 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-rocm') or (sys_platform == 'win32' and extra == 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-xpu') or (extra != 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-cu128' and extra == 'extra-11-irodori-tts-rocm') or (extra != 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-cu128' and extra == 'extra-11-irodori-tts-xpu') or (extra != 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-rocm' and extra == 'extra-11-irodori-tts-xpu')" },
     { name = "torch", version = "2.10.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-11-irodori-tts-cpu') or (sys_platform == 'win32' and extra == 'extra-11-irodori-tts-cpu') or (extra == 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-cu128') or (extra == 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-rocm') or (extra == 'extra-11-irodori-tts-cpu' and extra == 'extra-11-irodori-tts-xpu') or (extra == 'extra-11-irodori-tts-cu128' and extra == 'extra-11-irodori-tts-rocm') or (extra == 'extra-11-irodori-tts-cu128' and extra == 'extra-11-irodori-tts-xpu') or (extra == 'extra-11-irodori-tts-rocm' and extra == 'extra-11-irodori-tts-xpu')" },
@@ -1621,7 +1624,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "atmos", git = "https://github.com/qtmleap/atmos?subdirectory=packages%2Fpython-sdk&rev=2cf02e56d54a959e5c83eaf55c6370aebc6784f3" },
+    { name = "atmos", marker = "extra == 'atmos'", git = "https://github.com/qtmleap/atmos?subdirectory=packages%2Fpython-sdk&rev=2cf02e56d54a959e5c83eaf55c6370aebc6784f3" },
     { name = "dacvae", git = "https://github.com/facebookresearch/dacvae" },
     { name = "datasets", specifier = ">=3.0.0" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -1631,6 +1634,7 @@ requires-dist = [
     { name = "numba", specifier = ">=0.57.0" },
     { name = "peft", specifier = ">=0.18.0" },
     { name = "pyaml-env", specifier = ">=1.2.1" },
+    { name = "python-dotenv", marker = "extra == 'atmos'", specifier = ">=1.2.3" },
     { name = "pytorch-triton-rocm", marker = "sys_platform == 'linux' and extra == 'rocm'", specifier = ">=3.5.1", index = "https://download.pytorch.org/whl/rocm7.1", conflict = { package = "irodori-tts", extra = "rocm" } },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rapidfuzz", specifier = ">=3.14.5" },
@@ -1671,7 +1675,7 @@ requires-dist = [
     { name = "triton-xpu", marker = "(sys_platform == 'linux' and extra == 'xpu') or (sys_platform == 'win32' and extra == 'xpu')", specifier = "==3.6.0", index = "https://download.pytorch.org/whl/xpu", conflict = { package = "irodori-tts", extra = "xpu" } },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
-provides-extras = ["cpu", "cu128", "rocm", "xpu", "dev"]
+provides-extras = ["atmos", "cpu", "cu128", "rocm", "xpu", "dev"]
 
 [package.metadata.requires-dev]
 dev = [

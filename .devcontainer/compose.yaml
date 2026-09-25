@@ -8,8 +8,6 @@ services:
       - venv:/home/vscode/app/.venv
     tty: true
     stdin_open: true
-    environment:
-      ATMOS_API_URL: https://atmos-staging.qleap.jp
 
 volumes:
   venv:

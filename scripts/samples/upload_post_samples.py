@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Synthesize per-checkpoint audio samples after training and ship to atmos.
+"""Synthesize per-checkpoint audio samples after training and ship to the metrics backend.
 
 Used to back-fill samples for runs where sample_generation was not enabled
-during training. Resumes the existing atmos job and logs audio under keys
+during training. Resumes the existing metrics run and logs audio under keys
 ``samples_post/<ckpt_name>/<prompt_name>`` at the checkpoint's training step
 (so the post-hoc samples line up with the live training metrics in the
 same UI).
@@ -12,8 +12,8 @@ Usage:
         --output-dir outputs/ema_lora \\
         --base-checkpoint models/Irodori-TTS-500M-v2/model.safetensors \\
         --config configs/train_500m_v2_ema_lora.yaml \\
-        --atmos-project irodori-tts-speaker-lora \\
-        --atmos-job-id 63k8w8ee-...
+        --metrics-project irodori-tts-speaker-lora \\
+        --run-id 63k8w8ee-...
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from irodori_tts.inference_runtime import (
     SamplingRequest,
     save_wav,
 )
+from irodori_tts.metrics import MetricsLogger, create_metrics_logger
 
 
 def discover_checkpoints(output_dir: Path) -> list[tuple[int, str, Path]]:
@@ -65,25 +66,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config", required=True, help="Training YAML with sample_generation section"
     )
-    parser.add_argument("--atmos-project", required=True)
+    parser.add_argument("--metrics-backend", default="atmos", help="Metrics logging backend.")
+    parser.add_argument("--metrics-project", required=True)
     parser.add_argument(
-        "--atmos-job-id", required=True, help="Existing atmos job UUID to append samples to."
+        "--run-id", required=True, help="Existing run id (atmos job UUID) to append samples to."
     )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--codec-device", default="cuda")
-    parser.add_argument("--dry-run", action="store_true", help="Skip atmos; only write local wavs")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Skip the metrics backend; only write local wavs"
+    )
     return parser.parse_args()
 
 
-def init_atmos(args: argparse.Namespace):
+def init_metrics_logger(args: argparse.Namespace) -> MetricsLogger | None:
     if args.dry_run:
         return None
 
-    import atmos
-
-    atmos_run = atmos.init(args.atmos_project, job_id=args.atmos_job_id)
-    print(f"Resumed atmos job: {atmos_run.job_id}")
-    return atmos_run
+    metrics_logger = create_metrics_logger(
+        args.metrics_backend,
+        project=args.metrics_project,
+        run_name=None,
+        run_id=args.run_id,
+        enabled=True,
+    )
+    print(f"Resumed run: {metrics_logger.name or args.run_id}")
+    return metrics_logger
 
 
 @dataclass
@@ -94,7 +102,13 @@ class _RunConfig:
     samples_root: Path
 
 
-def process_checkpoint(step: int, label: str, ckpt_path: Path, run: _RunConfig, atmos_run) -> None:
+def process_checkpoint(
+    step: int,
+    label: str,
+    ckpt_path: Path,
+    run: _RunConfig,
+    metrics_logger: MetricsLogger | None,
+) -> None:
     args = run.args
     sample_cfg = run.sample_cfg
 
@@ -131,11 +145,11 @@ def process_checkpoint(step: int, label: str, ckpt_path: Path, run: _RunConfig, 
         wav_path = local_dir / f"{prompt.name}.wav"
         save_wav(wav_path, audio, sample_rate=sr)
         print(f"  {prompt.name}: {wav_path}  ({result.total_to_decode:.2f}s)")
-        if atmos_run is not None:
-            # atmos.log_audio() uploads immediately from a file path rather
-            # than an in-memory audio object, so the wav we just wrote to
-            # disk is reused directly.
-            atmos_run.log_audio(f"samples_post/{label}/{prompt.name}", wav_path, step)
+        if metrics_logger is not None and metrics_logger.enabled:
+            # log_audio() uploads immediately from a file path rather than an
+            # in-memory audio object, so the wav we just wrote to disk is
+            # reused directly.
+            metrics_logger.log_audio(f"samples_post/{label}/{prompt.name}", wav_path, step=step)
 
     runtime.unload()
     del runtime
@@ -164,7 +178,7 @@ def main() -> None:
     for _step, label, path in ckpts:
         print(f"  {label} -> {path.name}")
 
-    atmos_run = init_atmos(args)
+    metrics_logger = init_metrics_logger(args)
 
     samples_root = output_dir / "samples_post"
     samples_root.mkdir(parents=True, exist_ok=True)
@@ -173,10 +187,10 @@ def main() -> None:
         base_ckpt=base_ckpt, args=args, sample_cfg=sample_cfg, samples_root=samples_root
     )
     for step, label, ckpt_path in ckpts:
-        process_checkpoint(step, label, ckpt_path, run, atmos_run)
+        process_checkpoint(step, label, ckpt_path, run, metrics_logger)
 
-    if atmos_run is not None:
-        atmos_run.finish()
+    if metrics_logger is not None:
+        metrics_logger.finish()
     print("\nDone.")
 
 
