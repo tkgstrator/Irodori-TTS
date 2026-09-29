@@ -73,7 +73,7 @@ from irodori_tts.training.checkpointing import (
     save_checkpoint,
 )
 from irodori_tts.training.cli_args import (
-    ATMOS_VISIBILITIES,
+    METRICS_BACKENDS,
     TRAIN_MODES,
     build_parser,
     cli_provided,
@@ -305,14 +305,12 @@ def _resolve_configs(  # noqa: C901, PLR0912, PLR0915
         train_cfg = replace(train_cfg, progress=args.progress)
     if args.progress_all is not None:
         train_cfg = replace(train_cfg, progress_all_ranks=args.progress_all)
-    if args.atmos_enabled is not None:
-        train_cfg = replace(train_cfg, atmos_enabled=args.atmos_enabled)
-    if cli_provided(raw_argv, "--atmos-project"):
-        train_cfg = replace(train_cfg, atmos_project=args.atmos_project)
-    if cli_provided(raw_argv, "--atmos-run-name"):
-        train_cfg = replace(train_cfg, atmos_run_name=args.atmos_run_name)
-    if cli_provided(raw_argv, "--atmos-visibility"):
-        train_cfg = replace(train_cfg, atmos_visibility=args.atmos_visibility)
+    if cli_provided(raw_argv, "--metrics-backend"):
+        train_cfg = replace(train_cfg, metrics_backend=args.metrics_backend)
+    if cli_provided(raw_argv, "--metrics-project"):
+        train_cfg = replace(train_cfg, metrics_project=args.metrics_project)
+    if cli_provided(raw_argv, "--metrics-run-name"):
+        train_cfg = replace(train_cfg, metrics_run_name=args.metrics_run_name)
     if args.lora_enabled is not None:
         train_cfg = replace(train_cfg, lora_enabled=args.lora_enabled)
     if cli_provided(raw_argv, "--lora-r"):
@@ -689,10 +687,10 @@ def _resolve_configs(  # noqa: C901, PLR0912, PLR0915
         print("warning: valid_every is set but valid_ratio=0. Validation is disabled.")
     if train_cfg.checkpoint_best_n < 0:
         raise ValueError(f"checkpoint_best_n must be >= 0, got {train_cfg.checkpoint_best_n}")
-    if train_cfg.atmos_visibility not in ATMOS_VISIBILITIES:
+    if train_cfg.metrics_backend not in METRICS_BACKENDS:
         raise ValueError(
-            f"atmos_visibility must be one of {sorted(ATMOS_VISIBILITIES)}, "
-            f"got {train_cfg.atmos_visibility!r}"
+            f"metrics_backend must be one of {sorted(METRICS_BACKENDS)}, "
+            f"got {train_cfg.metrics_backend!r}"
         )
     precision = str(train_cfg.precision).lower()
     if precision not in {"fp32", "bf16"}:
@@ -738,7 +736,7 @@ def _resolve_configs(  # noqa: C901, PLR0912, PLR0915
     )
 
 
-def _setup_atmos_and_tokenizers(  # noqa: C901, PLR0912, PLR0915
+def _setup_metrics_and_tokenizers(  # noqa: C901, PLR0912, PLR0915
     *,
     args,
     distributed,
@@ -746,11 +744,11 @@ def _setup_atmos_and_tokenizers(  # noqa: C901, PLR0912, PLR0915
     model_cfg,
     train_cfg,
 ) -> tuple:
-    from irodori_tts.atmos_client import AtmosClient
-    from irodori_tts.atmos_client import from_env as _atmos_cfg_from_env
+    from irodori_tts.metrics import create_metrics_logger
 
-    # Resolve the persistent run UUID before atmos.init so the same atmos job
-    # is reused (job_id) when training resumes from a checkpoint. The uuid is
+    # Resolve the persistent run UUID before building the metrics logger so a
+    # backend that supports resumable jobs (passed through as run_id) reuses
+    # the same job when training resumes from a checkpoint. The uuid is
     # stored on the prior adapter_model.safetensors metadata (see
     # _build_lora_safetensors_metadata).
     run_uuid: str | None = None
@@ -767,24 +765,23 @@ def _setup_atmos_and_tokenizers(  # noqa: C901, PLR0912, PLR0915
     if not run_uuid:
         run_uuid = str(_uuid.uuid4())
 
-    atmos_client = AtmosClient(
-        _atmos_cfg_from_env(
-            enabled=train_cfg.atmos_enabled and is_main_process,
-            project=train_cfg.atmos_project,
-            run_name=train_cfg.atmos_run_name,
-            visibility=train_cfg.atmos_visibility or "private",
-            job_id=run_uuid,
-        ),
+    metrics_logger = create_metrics_logger(
+        train_cfg.metrics_backend,
+        project=train_cfg.metrics_project,
+        run_name=train_cfg.metrics_run_name,
+        run_id=run_uuid,
         config={
             "model": asdict(model_cfg),
             "train": asdict(train_cfg),
             "script": "train.py",
         },
+        enabled=is_main_process,
     )
-    if atmos_client.enabled:
+    if metrics_logger.enabled:
+        api_url = getattr(metrics_logger, "api_url", None)
         print(
-            f"atmos enabled: project={train_cfg.atmos_project} "
-            f"run={atmos_client.name} api_url={atmos_client.api_url or '<default>'}"
+            f"metrics: backend={train_cfg.metrics_backend} project={train_cfg.metrics_project} "
+            f"run={metrics_logger.name} api_url={api_url or '<default>'}"
         )
 
     # The distributed path assigns these through two complementary branches, so
@@ -845,7 +842,7 @@ def _setup_atmos_and_tokenizers(  # noqa: C901, PLR0912, PLR0915
                 f"(pretrained hidden_size={caption_hidden_size})."
             )
     return (
-        atmos_client,
+        metrics_logger,
         caption_tokenizer,
         run_uuid,
         tokenizer,
@@ -864,7 +861,7 @@ def _build_data(  # noqa: C901, PLR0912, PLR0913, PLR0915
     run_uuid,
     tokenizer,
     train_cfg,
-    atmos_client,
+    metrics_logger,
     world_size,
 ) -> tuple:
     manifest_index = _ManifestIndex.build(
@@ -1078,7 +1075,7 @@ def _build_data(  # noqa: C901, PLR0912, PLR0913, PLR0915
     )
 
     speaker_name = _resolve_speaker_id(train_cfg.manifest_path)
-    run_name = atmos_client.name or train_cfg.atmos_run_name or output_dir.name
+    run_name = metrics_logger.name or train_cfg.metrics_run_name or output_dir.name
     if is_main_process:
         print(f"[run identity] uuid={run_uuid} name={run_name} speaker={speaker_name}")
     if train_cfg.max_epochs is not None:
@@ -1552,7 +1549,7 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
     train_sampler,
     use_bf16,
     valid_loader,
-    atmos_client,
+    metrics_logger,
     world_size,
 ) -> None:
     accum_steps = int(train_cfg.gradient_accumulation_steps)
@@ -2015,7 +2012,7 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
                                         duration_group_metrics,
                                     )
                                 )
-                        atmos_client.log(metrics, step=step)
+                        metrics_logger.log(metrics, step=step)
 
                 if step % train_cfg.save_every == 0:
                     dataloader_state = _collect_dataloader_state(
@@ -2131,7 +2128,7 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
                                         valid_metrics,
                                     )
                                 )
-                        atmos_client.log(metrics, step=step)
+                        metrics_logger.log(metrics, step=step)
                         if es_enabled:
                             cur_val = float(valid_metrics["loss"])
                             if cur_val < es_best_val - train_cfg.early_stop_min_delta:
@@ -2139,7 +2136,7 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
                                 es_no_improve = 0
                             else:
                                 es_no_improve += 1
-                            atmos_client.log(
+                            metrics_logger.log(
                                 {
                                     "es/no_improve": es_no_improve,
                                     "es/best_val": es_best_val,
@@ -2270,7 +2267,7 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
                                 valid_metrics,
                             )
                         )
-                atmos_client.log(metrics, step=step)
+                metrics_logger.log(metrics, step=step)
                 best_val_checkpoints, best_path = maybe_save_best_val_loss_checkpoint(
                     output_dir=output_dir,
                     checkpoints=best_val_checkpoints,
@@ -2335,14 +2332,14 @@ def _run_training_loop(  # noqa: C901, PLR0912, PLR0913, PLR0915
             )
             if sample_cfg.enabled:
                 _maybe_emit_samples(step)
-            atmos_client.log({"train/final_step": float(step)}, step=step)
+            metrics_logger.log({"train/final_step": float(step)}, step=step)
             progress.write(f"Training finished at step={step}.")
     finally:
         if progress is not None:
             progress.close()
         if sampling_codec is not None:
             del sampling_codec
-        atmos_client.finish()
+        metrics_logger.finish()
         if distributed and dist.is_initialized():
             dist.destroy_process_group()
 
@@ -2380,11 +2377,11 @@ def main() -> None:
     if is_main_process and distributed:
         print(f"DDP enabled: world_size={world_size} (local_rank={local_rank})")
     (
-        atmos_client,
+        metrics_logger,
         caption_tokenizer,
         run_uuid,
         tokenizer,
-    ) = _setup_atmos_and_tokenizers(
+    ) = _setup_metrics_and_tokenizers(
         args=args,
         distributed=distributed,
         is_main_process=is_main_process,
@@ -2416,7 +2413,7 @@ def main() -> None:
         run_uuid=run_uuid,
         tokenizer=tokenizer,
         train_cfg=train_cfg,
-        atmos_client=atmos_client,
+        metrics_logger=metrics_logger,
         world_size=world_size,
     )
 
@@ -2491,7 +2488,7 @@ def main() -> None:
             model_device=device,
             step=current_step,
             output_dir=output_dir,
-            atmos_client=atmos_client,
+            metrics_logger=metrics_logger,
             log_fn=lambda msg: progress.write(msg) if progress is not None else None,
         )
 
@@ -2543,7 +2540,7 @@ def main() -> None:
         train_sampler=train_sampler,
         use_bf16=use_bf16,
         valid_loader=valid_loader,
-        atmos_client=atmos_client,
+        metrics_logger=metrics_logger,
         world_size=world_size,
     )
 

@@ -89,8 +89,7 @@ train:
   valid_ratio: 0.0
   valid_every: 0
 
-  atmos_enabled: false
-  atmos_project: 
-  atmos_run_name:
+  metrics_project:
+  metrics_run_name:
   ddp_find_unused_parameters: false
   seed: 0

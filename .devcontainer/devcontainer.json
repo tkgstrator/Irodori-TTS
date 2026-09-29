@@ -19,8 +19,7 @@
 		"ANTHROPIC_AUTH_TOKEN": "${localEnv:ANTHROPIC_AUTH_TOKEN}",
 		"HF_TOKEN": "${localEnv:HF_TOKEN}",
 		"UV_LINK_MODE": "copy",
-		"WAKATIME_API_KEY": "${localEnv:WAKATIME_API_KEY}",
-		"ATMOS_TOKEN": "${localEnv:ATMOS_TOKEN}"
+		"WAKATIME_API_KEY": "${localEnv:WAKATIME_API_KEY}"
 	},
 	"features": {
 		"ghcr.io/devcontainers/features/common-utils:2": {

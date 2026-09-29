@@ -6,7 +6,6 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
-    "atmos @ git+https://github.com/qtmleap/atmos@2cf02e56d54a959e5c83eaf55c6370aebc6784f3#subdirectory=packages/python-sdk",
     "dacvae",
     "datasets>=3.0.0",
     "gradio>=5.0.0",
@@ -34,6 +33,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+atmos = [
+    "atmos @ git+https://github.com/qtmleap/atmos@2cf02e56d54a959e5c83eaf55c6370aebc6784f3#subdirectory=packages/python-sdk",
+    "python-dotenv>=1.2.3",
+]
 cpu = [
     "torch>=2.10.0,<2.11.0",
     "torchao>=0.16.0,<0.17.0",

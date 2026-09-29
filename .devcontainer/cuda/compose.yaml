@@ -29,8 +29,6 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    environment:
-      ATMOS_API_URL: https://atmos-staging.qleap.jp
 
 volumes:
   venv-cuda:

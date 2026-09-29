@@ -11,8 +11,8 @@ Writes configs/train_500m_v2/lora/<speaker>.yaml, tuning:
     and ~30 val points regardless of dataset size
   - sample_generation.prompts from the per-speaker sample_texts
 
-The atmos run name is NOT written into the per-speaker yaml; it is passed
-at launch time by scripts/train/train_multi_speaker.sh via --atmos-run-name.
+The metrics run name is NOT written into the per-speaker yaml; it is passed
+at launch time by scripts/train/train_multi_speaker.sh via --metrics-run-name.
 
 Usage:
   uv run python scripts/train/make_speaker_config.py <speaker>

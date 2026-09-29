@@ -157,14 +157,13 @@ train:
   lora_bias: none
   lora_target_modules: diffusion_attn_mlp
 
-  # --- atmos logging -----------------------------------------------------
+  # --- metrics logging ---------------------------------------------------
   # Environment variables are resolved at load time by pyaml-env
   # (`${VAR:default}` syntax), so you can override any of these by
   # exporting the matching env var (e.g. via docker compose's env_file).
   # The per-speaker run name is set by scripts/train/train_multi_speaker.sh
-  # via --atmos-run-name "${speaker}_lora" at launch time.
-  atmos_enabled: true
-  atmos_project: ${ATMOS_PROJECT:irodori-tts}
+  # via --metrics-run-name "${speaker}_lora" at launch time.
+  metrics_project: ${METRICS_PROJECT:irodori-tts}
 
   seed: 42
 

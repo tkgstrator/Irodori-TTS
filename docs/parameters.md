@@ -448,8 +448,9 @@ learns to represent the target speaker unconditionally.
 | `checkpoint_best_n` / `--checkpoint-best-n` | `0` | Keeps best validation checkpoints when validation is enabled; otherwise limits periodic checkpoint count. |
 | `valid_ratio` / `--valid-ratio` | `0.0` | Splits a ratio of the manifest for validation. |
 | `valid_every` / `--valid-every` | `0` | Validation interval. Set `<=0` to disable validation. |
-| `atmos_enabled` / `--atmos` | `False` | Enables atmos metrics logging. |
-| `atmos_project`, `atmos_run_name`, `atmos_visibility` | varies | atmos run metadata and project visibility. |
+| `metrics_backend` / `--metrics-backend` | `"none"` | Metrics logging backend: `none` (disabled) or `atmos`. The `atmos` backend is an optional dependency (`uv sync --extra atmos`) and reads `ATMOS_API_URL`, `ATMOS_TOKEN`, `ATMOS_VISIBILITY` from the environment (and the repo-root dotenv file) rather than from the config. |
+| `metrics_project` / `--metrics-project` | `"Irodori-TTS"` | Metrics project name passed to the backend. |
+| `metrics_run_name` / `--metrics-run-name` | `None` | Metrics run name passed to the backend. |
 | `ddp_find_unused_parameters` / `--ddp-find-unused-parameters` | `False` | Enables DDP unused-parameter detection for conditional branches. |
 | `progress` / `--progress` | `True` | Enables tqdm progress bars. |
 | `progress_all_ranks` / `--progress-all` | `False` | Shows progress bars for all DDP ranks. |

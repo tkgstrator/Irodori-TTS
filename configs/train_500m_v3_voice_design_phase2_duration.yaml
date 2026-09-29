@@ -75,9 +75,8 @@ train:
   log_every: 100
   save_every: 1000
   checkpoint_best_n: 5
-  atmos_enabled: false
-  atmos_project:
-  atmos_run_name:
+  metrics_project:
+  metrics_run_name:
   ddp_find_unused_parameters: false
   valid_ratio: 0.0005
   valid_every: 1000
