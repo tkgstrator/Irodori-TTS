@@ -46,11 +46,8 @@ train:
   fixed_target_full_mask: true
   log_every: 100
   save_every: 1000
-  wandb_enabled: false
-  wandb_project:
-  wandb_entity:
-  wandb_run_name:
-  wandb_mode: online
+  metrics_project:
+  metrics_run_name:
   ddp_find_unused_parameters: false
   valid_ratio: 0.0005
   valid_every: 1000

@@ -26,7 +26,6 @@ dependencies = [
     "torchcodec>=0.10.0,<0.11.0",
     "transformers>=5.12.1,<6",
     "tqdm>=4.67.3",
-    "wandb>=0.17.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "rapidfuzz>=3.14.5",
@@ -34,6 +33,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+atmos = [
+    "atmos @ git+https://github.com/qtmleap/atmos@2cf02e56d54a959e5c83eaf55c6370aebc6784f3#subdirectory=packages/python-sdk",
+    "python-dotenv>=1.2.3",
+]
 cpu = [
     "torch>=2.10.0,<2.11.0",
     "torchao>=0.16.0,<0.17.0",

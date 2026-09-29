@@ -28,6 +28,8 @@
 #                                   models/Irodori-TTS-500M-v3/model.safetensors
 #   NO_RESUME                     - "true" to ignore existing checkpoints
 #   EXTRA_TRAIN_ARGS              - extra flags appended verbatim to train.py
+#   METRICS_BACKEND                - "none" (default) or "atmos"; forwarded to
+#                                   train.py as --metrics-backend
 
 set -uo pipefail
 
@@ -251,7 +253,8 @@ run_queue() {
       --config "${CONFIG}" \
       --manifest "${manifest}" \
       --output-dir "${outdir}" \
-      --wandb-run-name "${speaker}_lora_v4" \
+      --metrics-backend "${METRICS_BACKEND:-none}" \
+      --metrics-run-name "${speaker}_lora_v4" \
       "${init_args[@]}" \
       "${extra[@]}" \
       >> "${log}" 2>&1

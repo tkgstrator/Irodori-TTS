@@ -8,10 +8,10 @@ services:
     env_file:
       # Expected keys in .env:
       #   HF_TOKEN
-      #   WANDB_API_KEY
-      #   WANDB_BASE_URL            (e.g. https://wandb.tkgstrator.work)
-      #   CF_ACCESS_CLIENT_ID       (Cloudflare Access service token)
-      #   CF_ACCESS_CLIENT_SECRET
+      #   ATMOS_TOKEN               (used only when METRICS_BACKEND=atmos)
+      #   ATMOS_API_URL             (used only when METRICS_BACKEND=atmos;
+      #                              e.g. https://atmos-staging.qleap.jp)
+      #   ATMOS_VISIBILITY          (used only when METRICS_BACKEND=atmos)
       - ../../.env
     environment:
       HF_HOME: /root/.cache/huggingface
@@ -20,6 +20,8 @@ services:
       #   SPEAKERS: <speaker1>,<speaker2>
       #   NUM_GPUS: 8
       #   NO_RESUME: "true"
+      #   METRICS_BACKEND: atmos    (default: none)
+      #   METRICS_PROJECT: <project name>
     volumes:
       - ../../data:/app/data
       - ../../outputs:/app/outputs

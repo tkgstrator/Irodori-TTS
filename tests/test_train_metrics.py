@@ -456,10 +456,10 @@ class TestDurationConditionGroupLogSuffix:
         assert duration_metrics.duration_condition_group_log_suffix({}) == ""
 
 
-class TestDurationConditionGroupWandbMetrics:
+class TestDurationConditionGroupPrefixedMetrics:
     def test_prefixes_every_metric(self) -> None:
         metrics = duration_metrics.duration_condition_group_metrics(_totals())
-        logged = duration_metrics.duration_condition_group_wandb_metrics("val", metrics)
+        logged = duration_metrics.duration_condition_group_prefixed_metrics("val", metrics)
         assert len(logged) == duration_metrics.DURATION_CONDITION_GROUP_TOTAL_SIZE
         assert all(key.startswith("val/") for key in logged)
         assert logged["val/duration_loss_speaker"] == pytest.approx(2.0)
@@ -467,7 +467,7 @@ class TestDurationConditionGroupWandbMetrics:
 
     def test_includes_empty_groups(self) -> None:
         metrics = duration_metrics.duration_condition_group_metrics(_totals())
-        logged = duration_metrics.duration_condition_group_wandb_metrics("train", metrics)
+        logged = duration_metrics.duration_condition_group_prefixed_metrics("train", metrics)
         expected = {
             f"train/{name}_{group}"
             for group in duration_metrics.DURATION_CONDITION_GROUPS

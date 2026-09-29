@@ -100,10 +100,7 @@ train:
   checkpoint_best_n: 0
   valid_ratio: 0.0
   valid_every: 0
-  wandb_enabled: false
-  wandb_project:
-  wandb_entity:
-  wandb_run_name:
-  wandb_mode: online
+  metrics_project:
+  metrics_run_name:
   ddp_find_unused_parameters: false
   seed: 0

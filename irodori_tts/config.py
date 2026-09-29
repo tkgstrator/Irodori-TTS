@@ -1,4 +1,5 @@
 import json
+import warnings
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -204,11 +205,9 @@ class TrainConfig:
     timestep_stratified: bool = True
     timestep_min: float = 0.001
     timestep_max: float = 0.999
-    wandb_enabled: bool = False
-    wandb_project: str = "Irodori-TTS"
-    wandb_entity: str | None = None
-    wandb_run_name: str | None = None
-    wandb_mode: str = "online"
+    metrics_backend: str = "none"
+    metrics_project: str = "Irodori-TTS"
+    metrics_run_name: str | None = None
     ddp_find_unused_parameters: bool = False
     lora_enabled: bool = False
     lora_r: int = 16
@@ -292,15 +291,51 @@ def load_config_yaml(path: str | Path) -> dict[str, Any]:
         ) from exc
 
     # parse_config expands `${VAR}` / `${VAR:default}` against os.environ so
-    # secrets like WANDB_PROJECT / WANDB_ENTITY can live in env vars instead
-    # of being hardcoded in the yaml. `tag=None` makes the expansion
-    # tagless — no `!ENV` prefix required in the yaml.
+    # secrets like a metrics project name can live in env vars instead of
+    # being hardcoded in the yaml. `tag=None` makes the expansion tagless —
+    # no `!ENV` prefix required in the yaml.
     payload = parse_config(path=str(path), tag=None, default_value="")
     if payload is None or payload == "":
         return {}
     if not isinstance(payload, dict):
         raise ValueError(f"Config root must be a mapping: {path}")
+    train_section = payload.get("train")
+    if isinstance(train_section, dict):
+        payload["train"] = migrate_legacy_train_keys(train_section, source=str(path))
     return payload
+
+
+def migrate_legacy_train_keys(train: dict[str, Any], *, source: str) -> dict[str, Any]:
+    """
+    Rewrite the pre-metrics-layer `atmos_*` train keys into `metrics_*` keys.
+
+    Configs written before the metrics layer existed keep loading: atmos_enabled
+    becomes metrics_backend, atmos_project / atmos_run_name are renamed, and
+    atmos_visibility is dropped in favour of the ATMOS_VISIBILITY env var.
+    """
+    legacy = [key for key in train if key.startswith("atmos_")]
+    if not legacy:
+        return train
+    migrated = {key: value for key, value in train.items() if key not in legacy}
+    if "atmos_enabled" in train and "metrics_backend" not in migrated:
+        migrated["metrics_backend"] = "atmos" if train["atmos_enabled"] else "none"
+    for old, new in (("atmos_project", "metrics_project"), ("atmos_run_name", "metrics_run_name")):
+        if old in train and new not in migrated:
+            migrated[new] = train[old]
+    leftover = sorted(set(legacy) - _LEGACY_ATMOS_KEYS)
+    if leftover:
+        raise ValueError(f"Unknown keys in 'train' config: {leftover}")
+    warnings.warn(
+        f"{source}: train keys {sorted(legacy)} are deprecated; use metrics_backend / "
+        "metrics_project / metrics_run_name (atmos visibility now comes from "
+        "ATMOS_VISIBILITY).",
+        FutureWarning,
+        stacklevel=2,
+    )
+    return migrated
+
+
+_LEGACY_ATMOS_KEYS = {"atmos_enabled", "atmos_project", "atmos_run_name", "atmos_visibility"}
 
 
 def merge_sample_generation_overrides(

@@ -8,7 +8,7 @@ import torch
 
 from irodori_tts.lora import LORA_TARGET_PRESETS
 
-WANDB_MODES = {"online", "offline", "disabled"}
+METRICS_BACKENDS = {"none", "atmos"}
 TRAIN_MODES = {"rf", "duration_only"}
 
 
@@ -316,40 +316,21 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         default=None,
         help="Show tqdm progress bars for all ranks in DDP mode (default: rank0 only).",
     )
-    wandb_group = parser.add_mutually_exclusive_group()
-    wandb_group.add_argument(
-        "--wandb",
-        dest="wandb_enabled",
-        action="store_true",
-        help="Enable Weights & Biases logging.",
-    )
-    wandb_group.add_argument(
-        "--no-wandb",
-        dest="wandb_enabled",
-        action="store_false",
-        help="Disable Weights & Biases logging.",
-    )
-    parser.set_defaults(wandb_enabled=None)
     parser.add_argument(
-        "--wandb-project",
+        "--metrics-backend",
+        choices=sorted(METRICS_BACKENDS),
         default=None,
-        help="Weights & Biases project name.",
+        help="Metrics logging backend. 'none' (default) disables metrics logging.",
     )
     parser.add_argument(
-        "--wandb-entity",
+        "--metrics-project",
         default=None,
-        help="Weights & Biases entity/team name.",
+        help="Metrics backend project name.",
     )
     parser.add_argument(
-        "--wandb-run-name",
+        "--metrics-run-name",
         default=None,
-        help="Weights & Biases run name.",
-    )
-    parser.add_argument(
-        "--wandb-mode",
-        choices=sorted(WANDB_MODES),
-        default=None,
-        help="Weights & Biases mode.",
+        help="Metrics backend run name.",
     )
     lora_group = parser.add_mutually_exclusive_group()
     lora_group.add_argument(

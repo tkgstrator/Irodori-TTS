@@ -1,7 +1,8 @@
-"""Periodic audio sample generation during training, with optional W&B logging."""
+"""Periodic audio sample generation during training, with optional metrics audio logging."""
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -17,8 +18,9 @@ from .inference_runtime import (
 )
 
 if TYPE_CHECKING:
+    from irodori_tts.metrics import MetricsLogger
+
     from .tokenizer import PretrainedTextTokenizer
-    from .wandb_client import WandbClient
 
 
 def load_codec_for_sampling(
@@ -57,10 +59,10 @@ def generate_training_samples(  # noqa: PLR0913 -- keyword-only API called from 
     model_device: torch.device,
     step: int,
     output_dir: Path,
-    wandb_client: WandbClient | None,
+    metrics_logger: MetricsLogger | None,
     log_fn: Any | None = None,
 ) -> None:
-    """Synthesize the configured prompts and ship to W&B / disk.
+    """Synthesize the configured prompts and ship to the metrics backend / disk.
 
     The model is left in eval() during synthesis and restored to train() on exit.
     Caller is responsible for calling this only on rank0.
@@ -83,8 +85,7 @@ def generate_training_samples(  # noqa: PLR0913 -- keyword-only API called from 
             max_caption_len=train_cfg.max_caption_len,
         )
 
-        log_payload: dict[str, Any] = {}
-        wandb_active = wandb_client is not None and wandb_client.enabled
+        metrics_active = metrics_logger is not None and metrics_logger.enabled
 
         sample_dir = output_dir / "samples" / f"step_{step:07d}"
         if sample_cfg.save_local:
@@ -120,19 +121,26 @@ def generate_training_samples(  # noqa: PLR0913 -- keyword-only API called from 
             audio = result.audio.detach().to(torch.float32).cpu()
             sr = int(result.sample_rate)
 
+            wav_path: Path | None = None
             if sample_cfg.save_local:
-                save_wav(sample_dir / f"{prompt.name}.wav", audio, sample_rate=sr)
+                wav_path = save_wav(sample_dir / f"{prompt.name}.wav", audio, sample_rate=sr)
 
-            if wandb_active:
-                audio_np = audio.squeeze(0).numpy()
-                log_payload[f"samples/{prompt.name}"] = wandb_client.audio(
-                    audio_np,
-                    sample_rate=sr,
-                    caption=f"step={step}",
-                )
+            if metrics_active:
+                # log_audio() takes a file path (not raw samples) and backends
+                # may cap upload size, so reuse the on-disk save when we already
+                # wrote one (save_wav() defaults to 16-bit PCM), otherwise write
+                # a throwaway 16-bit PCM wav just for the upload and delete it.
+                if wav_path is not None:
+                    metrics_logger.log_audio(f"samples/{prompt.name}", wav_path, step=step)
+                else:
+                    import soundfile as sf
 
-        if wandb_active and log_payload:
-            wandb_client.log(log_payload, step=step)
+                    audio_np = audio.squeeze(0).numpy() if audio.shape[0] == 1 else audio.T.numpy()
+                    with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
+                        sf.write(tmp.name, audio_np, sr, subtype="PCM_16")
+                        metrics_logger.log_audio(
+                            f"samples/{prompt.name}", Path(tmp.name), step=step
+                        )
     finally:
         if was_training:
             raw_model.train()

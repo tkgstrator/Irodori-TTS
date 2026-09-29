@@ -1,4 +1,4 @@
-"""Per-condition-group duration metrics and their log/wandb formatting."""
+"""Per-condition-group duration metrics and their log/metrics-backend formatting."""
 
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def duration_condition_group_log_suffix(metrics: dict[str, float]) -> str:
     return " ".join(chunks)
 
 
-def duration_condition_group_wandb_metrics(
+def duration_condition_group_prefixed_metrics(
     prefix: str,
     metrics: dict[str, float],
 ) -> dict[str, float]:

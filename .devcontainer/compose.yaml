@@ -8,8 +8,6 @@ services:
       - venv:/home/vscode/app/.venv
     tty: true
     stdin_open: true
-    environment:
-      WANDB_BASE_URL: https://wandb.tkgstrator.work
 
 volumes:
   venv:
