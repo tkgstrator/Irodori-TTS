@@ -25,6 +25,9 @@
 		"WAKATIME_API_KEY": "${localEnv:WAKATIME_API_KEY}"
 	},
 	"features": {
+	  "ghcr.io/thamaji/devcontainer-features/codex-cli:1": {
+	    "VERSION": "latest"
+	  },
 		"ghcr.io/devcontainers/features/common-utils:2": {
 			"username": "vscode",
 			"userUid": "1000",
