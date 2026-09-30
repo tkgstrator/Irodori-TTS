@@ -230,3 +230,6 @@ gradio_outputs_voicedesign/
 /*_dirs.txt
 /*_dirs_sorted.txt
 /unique_*_dirs.txt
+
+# Local Codex configuration, credentials, and session state.
+/.codex/
