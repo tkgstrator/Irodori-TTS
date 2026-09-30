@@ -15,6 +15,7 @@
 		"source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,consistency=cached"
 	],
 	"remoteEnv": {
+		"CODEX_HOME": "/home/vscode/app/.codex",
 		"CLAUDE_CODE_AUTO_MODE_SERVER": "0",
 		"ANTHROPIC_BASE_URL": "${localEnv:ANTHROPIC_BASE_URL}",
 		"ANTHROPIC_AUTH_TOKEN": "${localEnv:ANTHROPIC_AUTH_TOKEN}",
