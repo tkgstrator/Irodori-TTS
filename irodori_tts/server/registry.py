@@ -113,12 +113,6 @@ class RuntimeRegistry:
             adapter_slots=slots,
         )
 
-        if not self.cfg.enable_watermark:
-            # The runtime watermarks whenever the SilentCipher backend loaded, with
-            # no flag of its own, so dropping the backend is how the server opts out.
-            logger.info("Watermarking disabled by config")
-            self._runtime.watermarker.model = None
-
     @contextmanager
     def acquire(self, uuid: str) -> Iterator[tuple[InferenceRuntime, SpeakerSpec]]:
         """Activate `uuid`'s adapter and hold the runtime exclusively for the

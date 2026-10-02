@@ -9,7 +9,7 @@ services:
       # Expected keys in .env:
       #   HF_TOKEN
       #   ATMOS_TOKEN               (used only when METRICS_BACKEND=atmos)
-      #   ATMOS_API_URL             (used only when METRICS_BACKEND=atmos;
+      #   ATMOS_BASE_URL            (used only when METRICS_BACKEND=atmos;
       #                              e.g. https://atmos-staging.qleap.jp)
       #   ATMOS_VISIBILITY          (used only when METRICS_BACKEND=atmos)
       - ../../.env

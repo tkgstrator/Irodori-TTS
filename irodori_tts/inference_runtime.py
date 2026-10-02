@@ -45,7 +45,6 @@ from .speaker_inversion import (
 )
 from .text_normalization import normalize_text
 from .tokenizer import PretrainedTextTokenizer
-from .watermark import SilentCipherWatermarker
 
 logger = logging.getLogger("irodori_tts.inference")
 
@@ -654,7 +653,6 @@ class InferenceRuntime:
         self.default_text_max_len = default_text_max_len
         self.default_caption_max_len = default_caption_max_len
         self.default_max_ref_seconds = float(default_max_ref_seconds)
-        self.watermarker = SilentCipherWatermarker(device=str(self.codec_device))
         self._infer_lock = threading.Lock()
         self._model_dtype = next(self.model.parameters()).dtype
         self._lora_adapter_names: dict[str, str] = {}
@@ -1328,13 +1326,12 @@ class InferenceRuntime:
             (
                 "[runtime] start synthesize "
                 "model_device={} model_precision={} codec_device={} codec_precision={} "
-                "silentcipher_watermark={} mode={} seconds={} steps={} seed={} candidates={} decode_mode={}"
+                "mode={} seconds={} steps={} seed={} candidates={} decode_mode={}"
             ).format(
                 self.key.model_device,
                 self.key.model_precision,
                 self.key.codec_device,
                 self.key.codec_precision,
-                self.watermarker.ready,
                 req.cfg_guidance_mode,
                 req.seconds,
                 req.num_steps,
@@ -1710,23 +1707,6 @@ class InferenceRuntime:
             stage_sec = _measure_end(self.model_device, t0, self.codec_device)
             stage_timings.append(("decode_latent", stage_sec))
             _log(f"[runtime] decode_latent ({decode_mode}): {stage_sec * 1000.0:.1f} ms")
-
-            if self.watermarker.ready:
-                t0 = _measure_start(self.codec_device)
-                trimmed_audios = self.watermarker.encode_batch(
-                    trimmed_audios,
-                    sample_rate=int(self.codec.sample_rate),
-                )
-                stage_sec = _measure_end(self.codec_device, t0)
-                stage_timings.append(("silentcipher_watermark", stage_sec))
-                _log(f"[runtime] silentcipher_watermark: {stage_sec * 1000.0:.1f} ms")
-            else:
-                msg = (
-                    "warning: SilentCipher watermark is unavailable; generated audio was not "
-                    "watermarked."
-                )
-                messages.append(msg)
-                _log(msg)
 
             total_to_decode = _measure_end(self.model_device, post_load_t0, self.codec_device)
             _log(f"[runtime] total_to_decode: {total_to_decode:.3f} s")

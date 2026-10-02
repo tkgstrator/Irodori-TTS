@@ -20,7 +20,6 @@ dependencies = [
     # for the OpenAI response_format values.
     "soundfile>=0.13.0",
     "sentencepiece>=0.2.0,<0.3",
-    "silentcipher @ git+https://github.com/SesameAILabs/silentcipher.git@d46d7d0893a583d8968ab3a6626e2289faec9152",
     "torch>=2.10.0",
     "torchaudio>=2.10.0",
     "torchcodec>=0.10.0,<0.11.0",
@@ -34,7 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 atmos = [
-    "atmos @ git+https://github.com/qtmleap/atmos@2cf02e56d54a959e5c83eaf55c6370aebc6784f3#subdirectory=packages/python-sdk",
+    "atmos @ git+https://github.com/qtmleap/atmos@77696b63a92972e605eba15f97fb3569e5c7d214#subdirectory=packages/python-sdk",
     "python-dotenv>=1.2.3",
 ]
 cpu = [
@@ -178,7 +177,7 @@ ignore = [
     "N", "A", "ISC", "ICN", "PIE", "TID",
     "PERF", "FURB", "LOG", "G", "DTZ", "TRY", "SLF",
 ]
-"irodori_tts/{codec,config,dataset,duration,gradio_emoji_palette,inference_runtime,lora,model,optim,progress,quantization,rf,speaker_inversion,text_normalization,tokenizer,watermark}.py" = [
+"irodori_tts/{codec,config,dataset,duration,gradio_emoji_palette,inference_runtime,lora,model,optim,progress,quantization,rf,speaker_inversion,text_normalization,tokenizer}.py" = [
     "C90", "PL", "SIM", "RET", "ARG", "PTH", "RUF",
     "N", "A", "ISC", "ICN", "PIE", "TID",
     "PERF", "FURB", "LOG", "G", "DTZ", "TRY", "SLF",
@@ -213,7 +212,6 @@ exclude = [
     "irodori_tts/speaker_inversion.py",
     "irodori_tts/text_normalization.py",
     "irodori_tts/tokenizer.py",
-    "irodori_tts/watermark.py",
 ]
 quote-style = "double"
 indent-style = "space"

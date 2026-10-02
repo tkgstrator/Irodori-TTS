@@ -16,10 +16,6 @@ codec_repo: Aratako/Semantic-DACVAE-Japanese-32dim
 codec_deterministic_encode: true
 codec_deterministic_decode: true
 
-# SilentCipher watermarking. The runtime applies it whenever the package loads,
-# so this is the only way to turn it off; unset means on.
-enable_watermark: false
-
 # The id GET /v1/models advertises and POST /v1/audio/speech requires in its
 # `model` field. Unset derives it from base_version, e.g. irodori-tts-v4.1-small.
 # model_id: irodori-tts-v4.1-small

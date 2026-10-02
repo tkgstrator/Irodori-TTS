@@ -448,7 +448,9 @@ class _ManifestIndex:
             .to(device="cpu", dtype=torch.int64)
             .contiguous(),
             "speakers": self.speakers,
-            "has_caption": self.has_caption.detach().to(device="cpu", dtype=torch.bool).contiguous(),
+            "has_caption": self.has_caption.detach()
+            .to(device="cpu", dtype=torch.bool)
+            .contiguous(),
             "num_frames": self.num_frames.detach().to(device="cpu", dtype=torch.int64).contiguous(),
         }
         tmp_path = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp")
@@ -553,6 +555,19 @@ class TTSCollator:
     latent_length_bucket_size: int = 0
     max_text_len: int = 256
     max_caption_len: int | None = None
+    dynamic_condition_padding: bool = False
+
+    @staticmethod
+    def _trim_condition_padding(
+        ids: torch.Tensor, mask: torch.Tensor, tokenizer: PretrainedTextTokenizer
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if tokenizer.tokenizer.padding_side != "right":
+            raise ValueError("dynamic_condition_padding requires right-padding tokenizers.")
+        if ids.device.type != "cpu" or mask.device.type != "cpu":
+            raise ValueError("dynamic_condition_padding requires CPU token IDs and masks.")
+        valid_columns = mask.any(dim=0).nonzero(as_tuple=True)[0]
+        width = int(valid_columns[-1]) + 1 if valid_columns.numel() else 1
+        return ids[:, :width].contiguous(), mask[:, :width].contiguous()
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
         texts = [x["text"] for x in batch]
@@ -564,6 +579,8 @@ class TTSCollator:
         bsz = len(latents)
 
         text_ids, text_mask = self.tokenizer.batch_encode(texts, max_length=self.max_text_len)
+        if self.dynamic_condition_padding:
+            text_ids, text_mask = self._trim_condition_padding(text_ids, text_mask, self.tokenizer)
         token_counts = text_mask.sum(dim=1)
         caption_ids = None
         caption_mask = None
@@ -576,6 +593,10 @@ class TTSCollator:
                 max_length=max_caption_len,
             )
             caption_mask = caption_mask & has_caption[:, None]
+            if self.dynamic_condition_padding:
+                caption_ids, caption_mask = self._trim_condition_padding(
+                    caption_ids, caption_mask, self.caption_tokenizer
+                )
 
         if self.fixed_target_latent_steps is not None:
             max_t = int(self.fixed_target_latent_steps)

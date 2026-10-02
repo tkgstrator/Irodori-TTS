@@ -29,7 +29,6 @@ codec_precision: fp32
 codec_repo: Aratako/Semantic-DACVAE-Japanese-32dim
 codec_deterministic_encode: true
 codec_deterministic_decode: true
-enable_watermark: false
 
 # GET /v1/models が名乗る ID。省略すると base_version から作られる。
 # model_id: irodori-tts-v4.1-small
@@ -53,7 +52,6 @@ lora_dir: models/LoRA
 | `codec_precision`            | DACVAE codec の精度。通常 `fp32` |
 | `codec_repo`                 | DACVAE codec の HF repo |
 | `codec_deterministic_encode/decode` | 決定論モード（同じ入力 → 同じ出力） |
-| `enable_watermark`           | watermark 付与を有効にするか（通常 `false`） |
 | `model_id`                   | `GET /v1/models` が返す ID で、`POST /v1/audio/speech` の `model` に一致が要る。省略時は `base_version` から `irodori-tts-v4.1-small` のように作られる |
 | `tail_window_size`           | 末尾トリミングのウィンドウサイズ（デフォルト `20`） |
 | `tail_std_threshold`         | 末尾トリミングの標準偏差閾値（デフォルト `0.05`） |
