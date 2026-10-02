@@ -398,24 +398,18 @@ class TestRuntimeLoad:
         with pytest.raises(KeyError), registry.acquire(UUID_A):
             pass
 
-    def test_watermarking_is_left_on_by_default(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("legacy_setting", [True, False])
+    def test_legacy_watermark_setting_is_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_setting: bool
     ):
         install_fake_runtime(monkeypatch)
-        registry = RuntimeRegistry(load_config(lora_test_config(tmp_path)))
+        path = lora_test_config(tmp_path, enable_watermark=legacy_setting)
+        cfg = load_config(path)
+        assert not hasattr(cfg, "enable_watermark")
+        registry = RuntimeRegistry(cfg)
         registry.load()
         with registry.acquire(UUID_A) as (base, _):
-            assert base.watermarker.model is not None
-
-    def test_disabling_the_watermark_drops_the_backend(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        install_fake_runtime(monkeypatch)
-        path = lora_test_config(tmp_path, enable_watermark=False)
-        registry = RuntimeRegistry(load_config(path))
-        registry.load()
-        with registry.acquire(UUID_A) as (base, _):
-            assert base.watermarker.model is None
+            assert not hasattr(base, "watermarker")
 
     def test_unloaded_registry_refuses_to_acquire(self, tmp_path: Path):
         registry = RuntimeRegistry(load_config(lora_test_config(tmp_path)))

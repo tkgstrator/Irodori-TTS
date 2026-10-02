@@ -130,7 +130,7 @@ def _no_real_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_atmos_backend_threads_project_and_run_id(monkeypatch: pytest.MonkeyPatch) -> None:
     runs = _install_stub_atmos(monkeypatch)
-    monkeypatch.setenv("ATMOS_API_URL", "https://atmos-staging.qleap.jp")
+    monkeypatch.setenv("ATMOS_BASE_URL", "https://atmos-staging.qleap.jp")
     monkeypatch.setenv("ATMOS_TOKEN", "dummy-token")
     monkeypatch.setenv("ATMOS_VISIBILITY", "private")
 

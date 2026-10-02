@@ -50,7 +50,6 @@ class FakeRuntime:
             sample_rate=FAKE_SAMPLE_RATE,
             model=SimpleNamespace(hop_length=FAKE_HOP_LENGTH),
         )
-        self.watermarker = SimpleNamespace(model=object())
         self.tokenizer = FakeTokenizer()
         # Test hook: called with `self` from inside synthesize(), while the
         # registry's lock is (correctly) still held. Lets concurrency tests

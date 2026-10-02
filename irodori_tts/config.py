@@ -182,6 +182,7 @@ class TrainConfig:
     gradient_accumulation_steps: int = 1
     max_text_len: int = 256
     max_caption_len: int | None = None
+    dynamic_condition_padding: bool = False
     text_condition_dropout: float = 0.1
     caption_condition_dropout: float = 0.1
     speaker_condition_dropout: float = 0.1

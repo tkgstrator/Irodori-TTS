@@ -24,7 +24,6 @@ For model weights and audio samples, please refer to the [Irodori-TTS-v4.1-Small
 - **Long Reference Audio**: One or more reference clips can be concatenated up to the checkpoint's 120-second limit
 - **Emoji-based Style Control**: Emoji annotations in input text can influence delivery and non-verbal vocal expressions in supported checkpoints
 - **Automatic Duration Prediction**: v4-Small estimates output length without manual `--seconds`
-- **Automatic Watermarking**: Generated audio is watermarked with [SilentCipher](https://github.com/sony/silentcipher) when available
 - **Multi-GPU Training**: Distributed training via `uv run --no-sync torchrun` with gradient accumulation, mixed precision (bf16), and W&B logging
 - **PEFT LoRA Fine-Tuning**: Parameter-efficient adaptation with PEFT/LoRA for released checkpoints
 - **Speaker Inversion**: Learn reusable speaker embedding tokens for a target voice while freezing the base model
@@ -293,8 +292,6 @@ uv run --no-sync python infer.py \
 For tuning guidance and detailed explanations of inference options, see the
 [Parameter Guide](docs/parameters.md).
 
-Generated audio is passed through [SilentCipher](https://github.com/sony/silentcipher) watermarking automatically when the dependency and model files are available.
-
 ## Training
 
 This section describes how to train **Irodori-TTS-v4.1-Small**. For training instructions
@@ -560,7 +557,6 @@ This project builds upon the following works:
 
 - [Echo-TTS](https://jordandarefsky.com/blog/2025/echo/) — Architecture and training design reference
 - [DACVAE](https://github.com/facebookresearch/dacvae) — Audio VAE
-- [SilentCipher](https://github.com/sony/silentcipher) — Audio watermarking
 
 ## Citation
 

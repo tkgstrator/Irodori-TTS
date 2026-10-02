@@ -7,12 +7,14 @@ headers, or an online/offline/disabled logging mode — the SDK always talks
 to a single `api_url` and always sends metrics, so there is nothing to
 thread through beyond the connection credentials and the run identity.
 
-Credentials and the server URL come from the environment (ATMOS_API_URL,
+Credentials and the server URL come from the environment (ATMOS_BASE_URL,
 ATMOS_TOKEN, ATMOS_VISIBILITY) rather than TrainConfig, since those are
 atmos-specific and have no meaning for other backends. Before reading them,
 a repo-root `.env` file is loaded (without overriding already-set env vars)
-when python-dotenv is installed, so `pip install 'irodori-tts[atmos]'`
-covers local development without an extra setup step.
+when python-dotenv is installed. The repo-root file deliberately overrides
+inherited environment values so it remains the source of truth for local and
+container runs. `pip install 'irodori-tts[atmos]'` covers local development
+without an extra setup step.
 """
 
 from __future__ import annotations
@@ -48,7 +50,7 @@ class AtmosMetricsLogger:
             return
 
         if load_dotenv is not None:
-            load_dotenv(_REPO_ROOT / ".env", override=False)
+            load_dotenv(_REPO_ROOT / ".env", override=True)
 
         try:
             import atmos
@@ -60,7 +62,7 @@ class AtmosMetricsLogger:
                 "`pip install 'atmos @ git+https://github.com/qtmleap/atmos#subdirectory=packages/python-sdk'`."
             ) from exc
 
-        self._api_url = os.environ.get("ATMOS_API_URL")
+        self._api_url = os.environ.get("ATMOS_BASE_URL")
         self._run = atmos.init(
             project,
             name=run_name or None,

@@ -8,7 +8,7 @@
 #   METRICS_PROJECT    - Metrics project name. Expanded into the training yaml
 #                        by pyaml-env (${METRICS_PROJECT:Irodori-TTS}).
 #   ATMOS_TOKEN        - atmos API token. Used only when METRICS_BACKEND=atmos.
-#   ATMOS_API_URL      - atmos server URL (e.g. https://atmos-staging.qleap.jp).
+#   ATMOS_BASE_URL     - atmos server URL (e.g. https://atmos-staging.qleap.jp).
 #                        Used only when METRICS_BACKEND=atmos.
 #   ATMOS_VISIBILITY   - atmos run visibility. Used only when METRICS_BACKEND=atmos.
 #   HF_DATASET         - HF dataset repo ID that holds all speakers as subdirs
@@ -172,7 +172,7 @@ done
 # -----------------------------------------------------------------------------
 if [ "${METRICS_BACKEND:-none}" = "atmos" ]; then
   if [ -n "${ATMOS_TOKEN:-}" ]; then
-    log "atmos token detected — runs will log to ${ATMOS_API_URL:-<default>}"
+    log "atmos token detected — runs will log to ${ATMOS_BASE_URL:-<default>}"
   else
     log "METRICS_BACKEND=atmos but no ATMOS_TOKEN — the run will fail to start; set ATMOS_TOKEN or METRICS_BACKEND=none"
   fi

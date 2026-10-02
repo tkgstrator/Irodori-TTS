@@ -1,40 +1,44 @@
-# LoRA fine-tuning configuration for Irodori-TTS-v4-Small.
+# LoRA fine-tuning configuration for Irodori-TTS-v4-Large.
+#
+# The model section matches the released Large checkpoint. The LoRA section
+# follows the v4-Small adapter recipe: train diffusion attention and retain the
+# Large duration predictor with the adapter.
 
 model:
   latent_dim: 32
   latent_patch_size: 1
-  text_vocab_size: 102400
-  text_tokenizer_repo: sbintuitions/modernbert-ja-310m
-  text_encoder_revision: 77675fc96a7e445e982e2ba90246b816efc74ec6
+  text_vocab_size: 262144
+  text_tokenizer_repo: google/t5gemma-2-1b-1b
+  text_encoder_revision: dd0a2683227859151b1730ca3a63087df5b5f39b
   text_encoder_type: pretrained
   text_add_bos: true
   pretrained_projector_type: residual_mlp
   pretrained_projector_hidden_ratio: 2.0
   pretrained_projector_dropout: 0.0
-  model_dim: 1280
-  num_layers: 12
-  num_heads: 20
+  model_dim: 2048
+  num_layers: 24
+  num_heads: 32
   mlp_ratio: 2.875
   speaker_mlp_ratio: 2.6
-  text_dim: 512
-  speaker_dim: 768
-  speaker_layers: 8
-  speaker_heads: 12
+  text_dim: 1280
+  speaker_dim: 1280
+  speaker_layers: 14
+  speaker_heads: 20
   speaker_patch_size: 4
   timestep_embed_dim: 512
-  adaln_rank: 192
+  adaln_rank: 256
   use_caption_condition: true
   use_speaker_condition: true
-  caption_vocab_size: 102400
-  caption_tokenizer_repo: sbintuitions/modernbert-ja-310m
+  caption_vocab_size: 262144
+  caption_tokenizer_repo: google/t5gemma-2-1b-1b
   caption_add_bos: true
-  caption_dim: 512
+  caption_dim: 1280
   use_duration_predictor: true
   duration_aux_dim: 14
-  duration_hidden_dim: 1024
-  duration_layers: 3
+  duration_hidden_dim: 1280
+  duration_layers: 4
   duration_dropout: 0.1
-  duration_attention_heads: 8
+  duration_attention_heads: 20
   duration_architecture: token_sum_dual_adarn_zero_no_aux
   duration_token_init_frames: 9.0
   duration_speaker_fusion: adarn_zero
@@ -43,10 +47,13 @@ model:
 
 train:
   train_mode: rf
+  # A100 80GB: effective batch 80 without activation recomputation.
+  # Longer clips may require a smaller microbatch and more accumulation.
   batch_size: 40
   gradient_accumulation_steps: 2
-  num_workers: 16
-  dataloader_persistent_workers: false
+  gradient_checkpointing: false
+  num_workers: 8
+  dataloader_persistent_workers: true
   dataloader_prefetch_factor: 4
   dataloader_cuda_prefetch: true
   length_bucket_enabled: true
@@ -82,13 +89,13 @@ train:
   duration_caption_dropout: 0.1
   duration_huber_delta: 0.1
   log_every: 100
-  save_every: 1000
+  save_every: 250
   checkpoint_best_n: 5
-  metrics_project: irodori-tts-v4
+  metrics_project: irodori-tts-v4-large
   metrics_run_name:
   ddp_find_unused_parameters: false
   valid_ratio: 0.0005
-  valid_every: 1000
+  valid_every: 100
   lora_enabled: true
   lora_r: 16
   lora_alpha: 32
@@ -98,16 +105,10 @@ train:
   lora_modules_to_save: auto
   seed: 0
 
-# Absent from the upstream v4 config, so runs produced no audio at all and no
-# CLI flag can turn it on. Checkpoints have to be compared by ear, and the
-# stopping policy is "keep the best-sounding val checkpoint", so samples are
-# what makes that judgement possible while a run is still going.
-# Prompts are left unset: train.py fills them from <dataset_dir>/config.yaml's
-# sample_texts, or picks length-balanced ones from the manifest.
 sample_generation:
   enabled: true
-  every: 500
-  on_best_val: true
+  every: 250
+  on_best_val: false
   num_steps: 32
   cfg_scale_text: 3.0
   cfg_scale_caption: 3.0

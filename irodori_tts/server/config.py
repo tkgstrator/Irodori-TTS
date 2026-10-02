@@ -67,7 +67,6 @@ class ServerConfig:
     codec_deterministic_encode: bool
     codec_deterministic_decode: bool
     model_id: str
-    enable_watermark: bool
     tail_window_size: int
     tail_std_threshold: float
     tail_mean_threshold: float
@@ -189,7 +188,6 @@ def load_config(path: Path) -> ServerConfig:
         codec_deterministic_encode=bool(raw.get("codec_deterministic_encode", True)),
         codec_deterministic_decode=bool(raw.get("codec_deterministic_decode", True)),
         model_id=str(raw.get("model_id") or _default_model_id(raw, base_hf_repo)),
-        enable_watermark=bool(raw.get("enable_watermark", True)),
         tail_window_size=int(raw.get("tail_window_size", 20)),
         tail_std_threshold=float(raw.get("tail_std_threshold", 0.05)),
         tail_mean_threshold=float(raw.get("tail_mean_threshold", 0.1)),

@@ -200,7 +200,7 @@ docker compose build train
 | `METRICS_BACKEND`         | 任意 | メトリクスロギングのバックエンド。`none`(デフォルト)または `atmos`                                   |
 | `METRICS_PROJECT`         | 任意 | メトリクスのプロジェクト名。yaml 側で `${METRICS_PROJECT}` として参照される(pyaml-env が展開)         |
 | `ATMOS_TOKEN`             | 任意 | `METRICS_BACKEND=atmos` のときのみ使用。指定すると atmos に自動ログインされる                        |
-| `ATMOS_API_URL`           | 任意 | `METRICS_BACKEND=atmos` のときのみ使用。atmos サーバの URL(例: `https://atmos-staging.qleap.jp`)  |
+| `ATMOS_BASE_URL`          | 任意 | `METRICS_BACKEND=atmos` のときのみ使用。atmos サーバの URL(例: `https://atmos-staging.qleap.jp`)  |
 | `ATMOS_VISIBILITY`        | 任意 | `METRICS_BACKEND=atmos` のときのみ使用。atmos run の公開範囲                                        |
 
 ### 3.2 `docker/train/compose.yaml`
@@ -214,7 +214,7 @@ HF_TOKEN=hf_xxx
 # METRICS_BACKEND=atmos
 # ATMOS_TOKEN=xxxxxxxx
 # (任意) デフォルトの staging サーバ以外を使う場合
-# ATMOS_API_URL=<your-atmos-host>
+# ATMOS_BASE_URL=<your-atmos-host>
 ```
 
 起動:

@@ -948,6 +948,7 @@ def _build_data(  # noqa: C901, PLR0912, PLR0913, PLR0915
         fixed_target_full_mask=train_cfg.fixed_target_full_mask,
         latent_length_bucket_size=train_cfg.latent_length_bucket_size,
         max_text_len=train_cfg.max_text_len,
+        dynamic_condition_padding=train_cfg.dynamic_condition_padding,
         max_caption_len=(
             train_cfg.max_text_len
             if train_cfg.max_caption_len is None
